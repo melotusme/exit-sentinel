@@ -17,7 +17,7 @@ macOS 菜单栏 / Windows 托盘应用，基于 Tauri 2。分别观测国内、�
 
 ### Windows x64
 
-从[私有 Release](https://github.com/melotusme/exit-sentinel-releases/releases/latest)下载 `Exit.Sentinel.windows.x64.exe`，安装后使用托盘图标。Windows 使用 Clash Verge Rev / Mihomo，不安装或调用 Shadowrocket、Python。支持 HTTP 控制器和 Windows 本机命名管道；默认读取 `%APPDATA%/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml`。
+从[私有 Release](https://github.com/melotusme/exit-sentinel-releases/releases/latest)下载 `Exit.Sentinel.windows.x64.exe`，安装后使用托盘图标。Windows 使用 Clash Verge Rev / Mihomo，不安装或调用 Shadowrocket、Python。首次启动如检测到 Clash Verge，将国外 / Claude / Gemini 检测代理预填为实际 mixed-port；国内代理保持独立，可在设置更改。支持 HTTP 控制器和 Windows 本机命名管道；默认读取 `%APPDATA%/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml`。
 
 ### Homebrew（Apple Silicon macOS）
 

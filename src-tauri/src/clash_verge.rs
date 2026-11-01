@@ -23,6 +23,14 @@ pub fn yaml(name: &str) -> Result<Value, String> {
     serde_yaml::from_slice(&bytes).map_err(|_| format!("Clash Verge {name} 格式无效"))
 }
 #[cfg(target_os = "windows")]
+pub fn local_proxy() -> Option<String> {
+    let config = yaml("clash-verge.yaml").ok()?;
+    let port = config["mixed-port"]
+        .as_u64()
+        .filter(|p| (1..=65535).contains(p))?;
+    Some(format!("http://127.0.0.1:{port}"))
+}
+#[cfg(target_os = "windows")]
 async fn api(config: &Value, path: &str) -> Result<Value, String> {
     let address = config["external-controller"].as_str().unwrap_or("");
     let secret = config["secret"].as_str().unwrap_or("");
@@ -175,6 +183,12 @@ pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
         r.node_name = node.clone();
         r.node_host = proxies["proxies"][&node]["server"]
             .as_str()
+            .or_else(|| {
+                config["proxies"]
+                    .as_array()
+                    .and_then(|a| a.iter().find(|p| p["name"].as_str() == Some(node.as_str())))
+                    .and_then(|p| p["server"].as_str())
+            })
             .unwrap_or("")
             .into();
         r.node_id = node;
@@ -209,6 +223,29 @@ pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn reads_native_mihomo_pipe_without_http_listener() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let name = format!(r"\\.\pipe\exit-sentinel-test-{}", std::process::id());
+        let mut server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&name)
+            .unwrap();
+        let handler = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            let mut request = [0u8; 2048];
+            let n = server.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET /configs HTTP/1.0"));
+            server
+                .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 17\r\n\r\n{\"mode\":\"global\"}")
+                .await
+                .unwrap();
+            server.flush().await.unwrap();
+        });
+        let config = serde_json::json!({"external-controller-pipe":name,"secret":"test-only"});
+        assert_eq!(api(&config, "/configs").await.unwrap()["mode"], "global");
+        handler.await.unwrap();
+    }
     #[test]
     fn follows_nested_groups_and_rejects_cycles() {
         let p = serde_json::json!({"GLOBAL":{"now":"AI"},"AI":{"now":"node"},"node":{"type":"ss"}});

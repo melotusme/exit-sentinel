@@ -1521,7 +1521,17 @@ fn main() {
                         Some(format!("配置读取失败，已使用默认值：{e}")),
                     ),
                 },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Saved::default(), None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    #[allow(unused_mut)]
+                    let mut initial = Saved::default();
+                    #[cfg(target_os = "windows")]
+                    if let Some(proxy) = clash_verge::local_proxy() {
+                        initial.settings.foreign_proxy = proxy.clone();
+                        initial.settings.claude_proxy = proxy.clone();
+                        initial.settings.gemini_proxy = proxy;
+                    }
+                    (initial, None)
+                },
                 Err(e) => (Saved::default(), Some(e.to_string())),
             };
             if saved.settings.validate().is_err() {
