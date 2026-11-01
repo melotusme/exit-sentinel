@@ -27,7 +27,6 @@
       ]
     },
     "autostart:default",
-    "updater:default",
     "process:allow-restart"
   ]
 }

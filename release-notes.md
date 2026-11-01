@@ -1,8 +1,8 @@
-## Exit Sentinel 0.2.1
+## Exit Sentinel 0.2.3
 
-- GitHub signed auto-update checks, download progress, install and relaunch.
-- Tray menu and settings page update controls; automatic checks can be disabled.
-- US exit state sales-tax hints, including Alaska local-tax caveat and unknown-state handling.
-- Preserve existing local preferences, history and manually registered node/IP status.
+- 源码和发布仓库均为私有。
+- 使用本机 GitHub CLI 登录读取私有 Release，凭据仅在原生后端使用。
+- 保留签名验证、进度展示、安装并重启及免税州提示。
+- 旧公开更新器需先本机安装新版后使用私有自更新。
 
-Apple Silicon macOS build. Currently ad-hoc signed, without Apple notarization.
+仅 Apple Silicon macOS；尚未 Apple Developer ID 公证。

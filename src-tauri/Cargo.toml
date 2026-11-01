@@ -1,6 +1,6 @@
 [package]
 name = "exit-sentinel"
-version = "0.2.1"
+version = "0.2.3"
 description = "A private macOS split-route egress monitor"
 edition = "2021"
 

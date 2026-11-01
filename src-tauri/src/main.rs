@@ -4,6 +4,7 @@ mod diagnostics;
 mod intelligence;
 mod model;
 mod net;
+mod private_updates;
 mod shadowrocket;
 use model::{Event, Probe, Settings, Tracker};
 use serde::{Deserialize, Serialize};
@@ -1499,6 +1500,7 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
 }
 fn main() {
     tauri::Builder::default()
+        .manage(private_updates::State::default())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -1721,6 +1723,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            private_updates::check_private_update,
+            private_updates::install_private_update,
             get_state,
             save_claude_ip,
             save_ai_node,
