@@ -215,7 +215,7 @@ fn tray_image(status: &str) -> Image<'static> {
     }
     Image::new_owned(rgba, 36, 36)
 }
-fn show(app: &tauri::AppHandle) {
+pub(crate) fn show(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -1577,18 +1577,6 @@ fn main() {
             };
             app.manage(s.clone());
             app.manage(diagnostics::Shared::default());
-            tauri::WebviewWindowBuilder::new(
-                app,
-                "diagnostics",
-                tauri::WebviewUrl::App("index.html?mode=diagnostics".into()),
-            )
-            .title("网站连通性 · curl")
-            .inner_size(900.0, 720.0)
-            .min_inner_size(680.0, 480.0)
-            .visible(false)
-            .skip_taskbar(true)
-            .decorations(false)
-            .build()?;
             TrayIconBuilder::with_id("sentinel")
                 .icon(tray_image("starting"))
                 .icon_as_template(false)

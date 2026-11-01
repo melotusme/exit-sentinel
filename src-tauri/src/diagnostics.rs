@@ -169,28 +169,8 @@ fn publish(app: &tauri::AppHandle, shared: &Shared) {
     let _ = app.emit("diagnostics-state", state);
 }
 pub fn show_popup(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("diagnostics") {
-        if let Some(tray) = app.tray_by_id("sentinel") {
-            if let Ok(Some(rect)) = tray.rect() {
-                if let Ok(Some(monitor)) = w.current_monitor() {
-                    let scale = monitor.scale_factor();
-                    let pos = rect.position.to_physical::<f64>(scale);
-                    let size = rect.size.to_physical::<f64>(scale);
-                    let left = monitor.position().x as f64;
-                    let right = left + monitor.size().width as f64;
-                    let x = (pos.x + size.width - 900.0 * scale)
-                        .max(left + 8.0 * scale)
-                        .min((right - 900.0 * scale - 8.0 * scale).max(left));
-                    let _ = w.set_position(tauri::PhysicalPosition::new(
-                        x,
-                        pos.y + size.height + 6.0 * scale,
-                    ));
-                }
-            }
-        }
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    crate::show(app);
+    let _ = app.emit("open-diagnostics", ());
 }
 pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     if id != "all" && id != "ai" && !SITES.iter().any(|s| s.0 == id) {
