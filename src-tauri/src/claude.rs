@@ -36,8 +36,9 @@ pub fn is_claude_process(line: &str) -> bool {
     line.ends_with("/Claude.app/Contents/MacOS/Claude")
         || line.ends_with("/Claude-3p.app/Contents/MacOS/Claude")
 }
+#[cfg(not(target_os = "windows"))]
 pub fn running() -> Result<bool, String> {
-    let out = std::process::Command::new("/bin/ps")
+    let out = crate::command("/bin/ps")
         .args(["-axo", "comm="])
         .output()
         .map_err(|e| format!("读取 Claude 进程失败：{e}"))?;
@@ -284,4 +285,18 @@ mod tests {
         )
         .is_err());
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn running() -> Result<bool, String> {
+    let out = crate::command("tasklist.exe")
+        .args(["/FI", "IMAGENAME eq Claude.exe", "/FO", "CSV", "/NH"])
+        .output()
+        .map_err(|_| "无法读取 Windows Claude 进程")?;
+    if !out.status.success() {
+        return Err("读取 Windows Claude 进程失败".into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l.to_ascii_lowercase().starts_with("\"claude.exe\",")))
 }

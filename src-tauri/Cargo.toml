@@ -1,7 +1,7 @@
 [package]
 name = "exit-sentinel"
-version = "0.2.3"
-description = "A private macOS split-route egress monitor"
+version = "0.3.0"
+description = "A private macOS and Windows split-route egress monitor"
 edition = "2021"
 
 [build-dependencies]
@@ -22,3 +22,10 @@ futures = "0.3"
 url = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+serde_yaml = "0.9"
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+arboard = { version = "3", default-features = false }

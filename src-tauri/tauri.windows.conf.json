@@ -1,0 +1,1 @@
+{"bundle":{"targets":["nsis"],"icon":["icons/icon.ico"],"windows":{"nsis":{"installMode":"currentUser","languages":["SimpChinese","English"],"displayLanguageSelector":true}}}}

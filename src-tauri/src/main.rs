@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod clash_verge;
 mod claude;
 mod diagnostics;
 mod intelligence;
@@ -6,6 +7,7 @@ mod model;
 mod net;
 mod private_updates;
 mod shadowrocket;
+mod sync;
 use model::{Event, Probe, Settings, Tracker};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -804,22 +806,10 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
     }
 }
 fn copy_to_clipboard(value: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut child = std::process::Command::new("/usr/bin/pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or("无法打开剪贴板")?
-        .write_all(value.as_bytes())
-        .map_err(|e| e.to_string())?;
-    if child.wait().map_err(|e| e.to_string())?.success() {
-        Ok(())
-    } else {
-        Err("写入剪贴板失败".into())
-    }
+    arboard::Clipboard::new()
+        .map_err(|e| e.to_string())?
+        .set_text(value)
+        .map_err(|e| e.to_string())
 }
 // IP metadata is persistent and reused until explicit refresh or bounded eviction.
 async fn cached_geo(s: &Shared, ip: &str, force: bool) -> Result<Value, String> {
@@ -1498,20 +1488,29 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
         load_tray_geography(app.clone(), s.clone());
     }
 }
+fn command(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd
+}
 fn main() {
+    let autostart = tauri_plugin_autostart::Builder::new();
+    #[cfg(target_os = "macos")]
+    let autostart = autostart.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
     tauri::Builder::default()
         .manage(private_updates::State::default())
+        .manage(sync::State::default())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
-                .arg("--autostart")
-                .build(),
-        )
+        .plugin(autostart.arg("--autostart").build())
         .setup(|app| {
             let path = app.path().app_data_dir()?;
             let (mut saved, load_error) = match std::fs::read(path.join("settings.json")) {
@@ -1723,6 +1722,10 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            sync::get_sync_config,
+            sync::save_sync_config,
+            sync::import_verge_webdav,
+            sync::sync_action,
             private_updates::check_private_update,
             private_updates::install_private_update,
             get_state,

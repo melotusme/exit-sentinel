@@ -30,4 +30,15 @@ GitHub Actions → Publish signed release → Run workflow 可指定私有源码
 
 旧版公开下载更新器不能读取私有仓库，需要先本机安装支持私有更新的版本，此后在应用内升级。无有效 gh 登录或仓库权限时显示明确错误。
 
-当前仅发布 Apple Silicon macOS，仍使用 ad-hoc Apple 签名，尚未 Developer ID 公证。更新包签名不能替代 Apple 签名 / 公证。
+0.2.x 仅发布 Apple Silicon macOS；macOS 仍使用 ad-hoc Apple 签名，尚未 Developer ID 公证。更新包签名不能替代 Apple 签名 / 公证。
+
+
+## 0.3.0 跨平台发布
+
+发布仓库 `.github/workflows/release.yml` 对同一源码 commit 并行运行 macOS ARM64 和 Windows x64 构建、测试和签名，全部成功后一次发布，防止某个平台缺失却成为 latest。源码中的 `.github/release-workflow.yml` 为审阅副本，不在源码仓库自动发布。
+
+Windows 使用 Tauri 自动合并的 `tauri.windows.conf.json`，生成当前用户 NSIS 安装包；不需要管理员权限。更新安装包采用 Tauri updater 签名，未配置 Windows Authenticode 证书，首次下载可能显示 SmartScreen 提示。Windows ARM64 目前使用 x64 模拟，尚无原生 ARM64 包。
+
+`prepare-release.mjs` 为每个平台规范化资产名称，`publish-cross.mjs` 在草稿中组装包含两个平台的 `latest.json` 和 `SHA256SUMS`。本机旧 `publish.mjs` 仅供历史 macOS 发布，不用于 0.3.0 及以后。
+
+Homebrew tap 为私有 `melotusme/homebrew-exit-sentinel`，cask 固定版本和 SHA-256，通过本机 `gh release download` 下载。发布后运行 tap 的 `scripts/update-cask.py` 更新并提交；不存储 GitHub token。当前 cask 只提供 Apple Silicon macOS。

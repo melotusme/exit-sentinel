@@ -7,7 +7,10 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: macos-14
+    strategy:
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,5 +20,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: python3 scripts/test_shadowrocket_snapshot.py

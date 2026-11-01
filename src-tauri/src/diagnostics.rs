@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    process::Command,
     sync::{Arc, Mutex},
 };
 use tauri::{Emitter, Manager};
@@ -111,7 +110,12 @@ pub fn execute(id: &str, name: &str, url: &str, proxy: &str) -> Result<Report, S
     }
     // The displayed command is independently runnable; actual invocation uses argv, never a shell.
     let command = format!(
-        "/usr/bin/curl {} --dump-header - --write-out '\\n%{{json}}\\n' {}",
+        "{} {} --dump-header - --write-out '\\n%{{json}}\\n' {}",
+        if cfg!(target_os = "windows") {
+            "curl.exe"
+        } else {
+            "/usr/bin/curl"
+        },
         args.iter()
             .map(|s| shell_arg(s))
             .collect::<Vec<_>>()
@@ -128,10 +132,14 @@ pub fn execute(id: &str, name: &str, url: &str, proxy: &str) -> Result<Report, S
         "--url".into(),
         url.into(),
     ]);
-    let out = Command::new("/usr/bin/curl")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("无法运行系统 curl：{e}"))?;
+    let out = crate::command(if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "/usr/bin/curl"
+    })
+    .args(&args)
+    .output()
+    .map_err(|e| format!("无法运行系统 curl：{e}"))?;
     let body = std::fs::read(&body_path).unwrap_or_default();
     let headers = std::fs::read(&header_path).unwrap_or_default();
     Ok(Report {

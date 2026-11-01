@@ -4,6 +4,7 @@ import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notif
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './style.css';
 import { initUpdates, updateSettings } from './updater';
+import { syncSettings, loadSync } from './sync';
 import { getVersion } from '@tauri-apps/api/app';
 import { ListView } from './list';
 import { mapLinks } from './maps';
@@ -50,7 +51,7 @@ const titles:Record<string,string>={starting:'等待首次检测',paused:'监控
 document.querySelector('#app')!.innerHTML=`
   <aside><div class="brand"><span class="brand-icon">${icon('shield')}</span><div>出口哨兵<small>EXIT SENTINEL</small></div></div>
   <div class="section-label">工作空间</div><nav aria-label="主导航"><button data-tab="monitor" class="active">${icon('globe')}出口监控</button><button data-tab="ai">${icon('shield')}AI 服务与 IP</button><button data-tab="history">${icon('pulse')}变化记录 <span id="event-count">0</span></button><button data-tab="settings">${icon('settings')}监控设置</button><button data-tab="guide">${icon('book')}使用指南</button></nav>
-  <div class="sidebar-foot"><span class="dot green"></span> 本机运行 · 无账号<small>关闭窗口后，菜单栏继续守护。</small><span class="version">macOS / <span id="app-version">读取版本…</span></span></div></aside>
+  <div class="sidebar-foot"><span class="dot green"></span> 本机运行 · 无账号<small>关闭窗口后，托盘继续守护。</small><span class="version">macOS · Windows / <span id="app-version">读取版本…</span></span></div></aside>
   <main><header><div><div class="eyebrow">NETWORK OBSERVATORY</div><h1 id="page-title">看清每一条出口。</h1><p id="page-subtitle">国内与国外，分别观测。网络变化，及时知晓。</p></div><button id="curl-panel">网站连通性 · curl</button><button id="check" class="primary">${icon('refresh')}立即检测</button></header><div id="software-update" role="status" aria-live="polite"></div><div id="content"></div></main>
   <dialog id="route-details" class="route-dialog"><div id="route-content"></div></dialog><dialog id="details"><div id="detail-content"></div></dialog><div id="toast" role="status" aria-live="polite"></div>`;
 const content=document.querySelector<HTMLElement>('#content')!;
@@ -64,7 +65,7 @@ function chart(p:Probe){const vals=series.get(p.id)?.values||[];if(vals.length<2
 function exitCard(group:string,title:string,en:string){const p=primary(group);const g=p?.ip?geoCache.get(p.ip):null;
   return `<section class="exit-card ${group}"><div class="card-top"><span class="route-icon">${icon('globe')}</span><span class="pill">${esc(en)}</span></div><div class="eyebrow">${esc(title)}</div>
     <div class="ip">${esc(p?.ip||'等待有效出口')}</div><div class="ip-info">${g?esc([g.country,g.region,g.city].filter(Boolean).join(' / ')):esc(p?.detail||'点击详情，查询城市、邮编和运营商')}</div>
-    <p class="tax-hint">${g?.sales_tax?esc(g.sales_tax.label):'免税州：等待位置查询'}</p>${g?.country_code==='US'?`<small>${esc(g.sales_tax?.note)}</small>`:''}<div class="route-line"><span class="node"></span><span>这台 Mac</span><span class="route-dash"></span><span>${esc(group==='domestic'?'国内检测站':'国外检测站')}</span><span class="node end"></span></div>
+    <p class="tax-hint">${g?.sales_tax?esc(g.sales_tax.label):'免税州：等待位置查询'}</p>${g?.country_code==='US'?`<small>${esc(g.sales_tax?.note)}</small>`:''}<div class="route-line"><span class="node"></span><span>这台电脑</span><span class="route-dash"></span><span>${esc(group==='domestic'?'国内检测站':'国外检测站')}</span><span class="node end"></span></div>
     <div class="card-bottom"><span>${p?.ip?`${p.latency} ms <span class="muted">检测耗时</span>`:'<span class="muted">尚无有效测量</span>'}</span><button class="text-button" data-detail="${esc(p?.id||'')}" ${!p?.ip?'disabled':''}>IP 详情 ${icon('arrow')}</button></div></section>`;
 }
 function routeSummary(r:RouteSnapshot|null|undefined){return r?`<div class="route-snapshot"><strong>节点：${esc(r.node_name||'未确认')}</strong><p>配置：${esc(r.config||'未读取')} · ${esc(r.mode)}</p><p class="small">${esc(r.chain.join(' → ')||'暂无策略链')}</p><small>${esc(r.node_host?`节点服务器：${r.node_host} · ${r.subscription}`:r.subscription)}</small><small>${esc(r.association)} · ${esc(r.basis)}</small>${r.error?`<p class="warning">${esc(r.error)}</p>`:''}</div>`:'<small>暂无节点快照；请重新检测。</small>'}
@@ -85,7 +86,7 @@ function render(){if(!state)return; const v=state;
     <div class="section-head"><h2>检测站观测</h2><span>各域名单独建立基线</span></div><section class="panel probe-panel"><div class="probe-head"><span>检测目标</span><span>实际出口 / 状态</span><span>最近延迟走势</span><span>耗时</span></div>
     ${probeList.render(v.probes,probeRow)}</section>
     <div class="notice">${icon('shield')}<p>检测站看到的出口，取决于该域名的分流规则。这里的 IP <strong>不等于 Claude 一定看到的 IP</strong>；绿色只表示检测成功，不代表账号安全评级。</p></div>
-    <details class="network"><summary>查看本机网络与系统代理快照</summary><pre>${esc(v.network||'正在读取…')}</pre><p>自动使用系统路由 / TUN 与进程代理环境变量；不会自动执行 macOS PAC。IPv6 默认关闭，可在设置中单独开启。</p></details>`;
+    <details class="network"><summary>查看本机网络与系统代理快照</summary><pre>${esc(v.network||'正在读取…')}</pre><p>自动使用系统路由 / TUN 与进程代理环境变量；不会自动执行 系统 PAC。IPv6 默认关闭，可在设置中单独开启。</p></details>`;
   if(tab==='history')content.innerHTML=`<div class="section-head"><h2>变化时间线</h2><button id="clear">清空记录</button></div><section class="panel timeline">${historyList.render(v.history,historyRow)}</section>`;
   if(tab==='ai')renderAi();
   if(tab==='settings')renderSettings();
@@ -103,13 +104,13 @@ function renderAi(){
   content.innerHTML=`<section class="panel ai-summary"><div><h2>Claude Desktop · ${v.paused?'监控已暂停':c.running===null?'待检测 / 进程读取异常':c.running?'运行中':'未打开'}</h2><p class="muted">${v.paused?'暂停期间不记录打开事件':`进程最近检查：<span id="claude-checked">${time(c.checked)}</span>`} · 关闭窗口仍监控</p><p>Claude 观测出口：<strong class="mono">${esc(c.ip||'尚无有效结果')}</strong></p><small>${esc(c.source||'claude.ai 同域名 trace')} · 本应用请求，进程分流需另行核对</small></div><div><button id="test-ai" class="primary" ${v.ai_testing?'disabled':''}>${v.ai_testing?'正在分别测试…':'测试 Claude 和 Gemini'}</button><p class="small muted">不登录账号，不自动更改可用状态</p></div></section>
   ${v.unacknowledged&&v.history[0]?.title==='Claude 出口告警'?`<div class="warning" role="alert"><strong>Claude 出口需要确认</strong><p>${esc(v.history[0].detail)}</p><button id="ack">确认已读</button><small>确认已读不会修改 IP 的可用状态。</small></div>`:''}
   ${c.error?`<p class="warning">Claude 出口未确认：${esc(c.error)}</p>`:''}${v.storage_error?`<p class="warning">保存异常：${esc(v.storage_error)}</p>`:''}${v.notification_error?`<p class="warning">系统通知异常：${esc(v.notification_error)}</p>`:''}
-  <div class="exit-grid ai-tests">${['claude','gemini'].map(service=>{const t=v.ai_tests.find(t=>t.service===service),current=v.current_routes?.find(r=>r.service===service);return `<section class="panel ai-test"><h2>${service==='claude'?'Claude':'Gemini'} · 独立路径</h2>${t?`<p>${t.http_code===null?'连接失败':`主页 HTTP ${t.http_code}`} · ${t.latency} ms</p><p class="mono">${esc(t.ip||'出口 IP 未确认')}</p><small>${esc(t.ip_basis)}</small><small>路径：${esc(t.path||'本机路由 / TUN')}</small><p class="small">${esc(t.error||'主页请求成功；账号与对话可用性仍由你确认')}</p><small>${time(t.time)}</small>`:'<p class="muted">尚未测试</p>'}<div class="section-head"><h3>当前 Shadowrocket 选择</h3><button data-copy-service="${esc(service)}" ${current?'':'disabled'}>复制</button></div>${routeSummary(current)}${nodeCurrent(current)}${t?.route?`<details class="network"><summary>查看本次测试的节点快照</summary>${routeSummary(t.route)}</details>`:''}</section>`}).join('')}</div>
+  <div class="exit-grid ai-tests">${['claude','gemini'].map(service=>{const t=v.ai_tests.find(t=>t.service===service),current=v.current_routes?.find(r=>r.service===service);return `<section class="panel ai-test"><h2>${service==='claude'?'Claude':'Gemini'} · 独立路径</h2>${t?`<p>${t.http_code===null?'连接失败':`主页 HTTP ${t.http_code}`} · ${t.latency} ms</p><p class="mono">${esc(t.ip||'出口 IP 未确认')}</p><small>${esc(t.ip_basis)}</small><small>路径：${esc(t.path||'本机路由 / TUN')}</small><p class="small">${esc(t.error||'主页请求成功；账号与对话可用性仍由你确认')}</p><small>${time(t.time)}</small>`:'<p class="muted">尚未测试</p>'}<div class="section-head"><h3>当前 代理客户端 选择</h3><button data-copy-service="${esc(service)}" ${current?'':'disabled'}>复制</button></div>${routeSummary(current)}${nodeCurrent(current)}${t?.route?`<details class="network"><summary>查看本次测试的节点快照</summary>${routeSummary(t.route)}</details>`:''}</section>`}).join('')}</div>
   <div class="notice"><p>Claude 使用 claude.ai 的 trace 获取源 IP。Gemini 没有默认 IP 回显接口，可在设置中配置已确认与 Google 策略一致的检测 URL；否则保持未确认。两者独立遵循 TUN 分流，可分别指定代理。HTTP 对端地址是服务器或 Fake-IP，不能作为出口 IP。</p></div>
   <div class="section-head"><h2>登记节点状态（无需 IP）</h2></div>
   <form id="ai-node-form" class="panel ai-form"><label class="note-field">服务与节点<select name="target" required><option value="">请选择当前节点或已登记节点</option>${(v.current_routes||[]).filter(r=>r.consistent&&!r.error&&r.node_name).map(r=>`<option value="current:${esc(r.service)}:${esc(r.fingerprint)}">${r.service==='claude'?'Claude':'Gemini'} · 当前 · ${esc(r.node_name)} · ${esc(r.config)}</option>`).join('')}${(v.ai_nodes||[]).map(r=>`<option value="saved:${esc(r.service)}:${esc(r.key)}">${r.service==='claude'?'Claude':'Gemini'} · 已登记 · ${esc(r.route.node_name)} · ${esc(r.route.config)}</option>`).join('')}</select></label><label>手动节点状态<select name="status"><option value="pending">待确认</option><option value="safe">可用（手动确认）</option><option value="risk">风险 / 不可用</option></select></label><label class="note-field">节点备注<input name="note" maxlength="500" placeholder="可用性确认依据"></label><button type="submit" class="primary">保存节点状态</button><p class="small muted">Claude / Gemini 独立登记，不要求 IP。只确认此配置节点快照；切换节点后不会套用旧状态。</p></form>
   <div class="section-head"><h2>已登记节点</h2></div><section class="panel ai-records">${nodeList.render(v.ai_nodes||[],nodeRow)}</section>
   <div class="section-head"><h2>添加 / 更新 IP 状态</h2><button id="use-claude-ip" ${!c.ip?'disabled':''}>填入 Claude 当前出口</button></div>
-  <form id="ai-ip-form" class="panel ai-form"><label>服务<select name="service"><option value="claude">Claude</option><option value="gemini">Gemini</option></select></label><label>公网 IP<input name="ip" required placeholder="IPv4 或 IPv6"></label><label>手动状态<select name="status"><option value="pending">待确认</option><option value="safe">可用（手动确认安全）</option><option value="risk">风险 / 不可用</option></select></label><label class="note-field">备注<input name="note" maxlength="500" placeholder="节点、地区或确认依据"></label><button type="submit" class="primary">保存 IP 状态</button><label class="manual-route-toggle"><input name="attach_current" type="checkbox">我已核对该 IP 与当前所选节点，关联当前 Shadowrocket 配置快照</label><p class="small muted">同一服务 + IP 更新已有记录；跨服务独立保存。“可用”表示你的确认。手动添加不生成首次打开记录。</p></form>
+  <form id="ai-ip-form" class="panel ai-form"><label>服务<select name="service"><option value="claude">Claude</option><option value="gemini">Gemini</option></select></label><label>公网 IP<input name="ip" required placeholder="IPv4 或 IPv6"></label><label>手动状态<select name="status"><option value="pending">待确认</option><option value="safe">可用（手动确认安全）</option><option value="risk">风险 / 不可用</option></select></label><label class="note-field">备注<input name="note" maxlength="500" placeholder="节点、地区或确认依据"></label><button type="submit" class="primary">保存 IP 状态</button><label class="manual-route-toggle"><input name="attach_current" type="checkbox">我已核对该 IP 与当前所选节点，关联当前 代理客户端 配置快照</label><p class="small muted">同一服务 + IP 更新已有记录；跨服务独立保存。“可用”表示你的确认。手动添加不生成首次打开记录。</p></form>
   <div class="section-head"><h2>服务 IP 记录</h2><span>首次打开为 Sentinel 监控期间的首次观测</span></div><section class="panel ai-records">${aiList.render(v.claude_ips,ipRow)}</section>`;
   const nodeForm=content.querySelector<HTMLFormElement>('#ai-node-form');for(const [k,v] of Object.entries(nodeDraft)){const input=nodeForm?.elements.namedItem(k) as HTMLInputElement|null;if(input)input.value=v;}
   const form=content.querySelector<HTMLFormElement>('#ai-ip-form');for(const [k,v] of Object.entries(aiDraft)){const input=form?.elements.namedItem(k) as HTMLInputElement|null;if(input){if(input.type==='checkbox')input.checked=v==='true';else input.value=v;}}
@@ -117,17 +118,18 @@ function renderAi(){
 function renderSettings(){const s=state!.settings;
   content.innerHTML=`<form id="settings-form" class="panel settings"><h2>检测与提醒</h2><label class="field">出口检测间隔（秒）<input name="interval" type="number" min="10" max="3600" value="${s.interval}" required><small>默认 30 秒。出口变化、失败、恢复连续两次确认；本机网络变化约 6 秒确认。</small></label>
   <label class="toggle"><span>变化时发送系统通知<small>无提示音，菜单栏同时切换图标。</small></span><input name="notifications" type="checkbox" ${s.notifications?'checked':''}></label>
-  <label class="toggle"><span>开机自启<small id="autostart-status">${auto===null?'正在读取系统状态…':'登录这台 Mac 后在菜单栏后台运行。切换立即生效，无需保存。'}</small></span><input name="autostart" type="checkbox" role="switch" ${auto?'checked':''} ${auto===null||autoBusy?'disabled':''}></label>
+  <label class="toggle"><span>开机自启<small id="autostart-status">${auto===null?'正在读取系统状态…':'登录这台电脑后在托盘后台运行。切换立即生效，无需保存。'}</small></span><input name="autostart" type="checkbox" role="switch" ${auto?'checked':''} ${auto===null||autoBusy?'disabled':''}></label>
   <label class="toggle"><span>保存变化记录<small>只保留最近 200 条；关闭后清除已保存的记录。</small></span><input name="retain_history" type="checkbox" ${s.retain_history?'checked':''}></label>
   <label class="toggle"><span>额外检测国外 IPv6 出口<small>默认关闭。无 IPv6 连通时显示不可达，不影响四项主检测的整体状态。</small></span><input name="ipv6" type="checkbox" ${s.ipv6?'checked':''}></label>
-  ${updateSettings()}<h2>分流路径</h2><p class="muted">留空：遵循本机路由 / TUN 和进程代理变量。不会自动读取 macOS 系统代理或执行 PAC。direct：仅忽略进程代理变量，仍遵循 TUN。</p>
+  ${updateSettings()}<h2>分流路径</h2><p class="muted">留空：遵循本机路由 / TUN 和进程代理变量。不会自动读取系统代理或执行 PAC。direct：仅忽略进程代理变量，仍遵循 TUN。</p>
   <label class="field">国内检测代理<input name="domestic_proxy" value="${esc(s.domestic_proxy)}" placeholder="留空，或 direct，或 http://127.0.0.1:端口"><small>只影响国内两个检测站。</small></label>
   <label class="field">国外检测与详情查询代理<input name="foreign_proxy" value="${esc(s.foreign_proxy)}" placeholder="留空，或 socks5h://127.0.0.1:端口"><small>推荐使用代理客户端的本地无认证端口；不保存代理密码。</small></label>
-  <h2>AI 服务独立路径</h2><p class="muted">默认留空，各自域名沿现有 TUN 分流；不会继承“国外检测代理”。不修改 Shadowrocket 规则。</p>
+  <h2>AI 服务独立路径</h2><p class="muted">默认留空，各自域名沿现有 TUN 分流；不会继承“国外检测代理”。不修改 代理客户端 规则。</p>
   <label class="field">Claude 检测代理<input name="claude_proxy" value="${esc(s.claude_proxy)}" placeholder="留空，或独立本地代理 URL"></label>
   <label class="field">Gemini 检测代理<input name="gemini_proxy" value="${esc(s.gemini_proxy)}" placeholder="留空，或独立本地代理 URL"></label>
   <label class="field">Gemini 参考出口检测 URL（可选）<input name="gemini_ip_url" value="${esc(s.gemini_ip_url)}" placeholder="https://…"><small>必须回显公网 IP，且你已确认它与 Gemini 命中相同策略 / 节点。没有配置时显示 IP 未确认；不会使用通用国外 IP 替代。</small></label>
-  <div class="form-actions"><button class="primary" type="submit">保存设置</button><button type="button" id="test-notification">发送测试通知</button></div><p id="permission" class="small muted"></p></form>`;
+  <div class="form-actions"><button class="primary" type="submit">保存设置</button><button type="button" id="test-notification">发送测试通知</button></div><p id="permission" class="small muted"></p></form>${syncSettings()}`;
+  void loadSync();
   isPermissionGranted().then(ok=>{const e=document.querySelector('#permission');if(e)e.textContent=ok?'通知授权：已允许（仍受勿扰模式和系统通知设置影响）':'通知授权：尚未允许；保存并启用通知或发送测试通知时会请求授权。'}).catch(()=>{});
 }
 async function permission(){let ok=await isPermissionGranted();if(!ok)ok=(await requestPermission())==='granted';if(!ok)toast('通知尚未获允许，请在系统设置 → 通知 → Exit Sentinel 中启用。');return ok}
@@ -176,7 +178,7 @@ document.addEventListener('click',async event=>{const b=(event.target as HTMLEle
       case 'clear':await call('clear_history');toast('记录已清空');break;
       case 'close-routes':document.querySelector<HTMLDialogElement>('#route-details')!.close();break;
       case 'close-dialog':dialog.close();dialog.dataset.ip='';break;
-      case 'test-notification':if(await permission()){await call('test_notification');toast('已向 macOS 提交通知，请确认通知是否出现。')}break;
+      case 'test-notification':if(await permission()){await call('test_notification');toast('已向系统提交通知，请确认通知是否出现。')}break;
       case 'nearby':await loadPlaces(dialog.dataset.ip!);break;
     }
   }catch(e){toast(String(e))}
@@ -197,7 +199,7 @@ document.addEventListener('submit',async e=>{if((e.target as HTMLElement).id!=='
 document.addEventListener('submit',async e=>{if((e.target as HTMLElement).id!=='ai-ip-form')return;e.preventDefault();const form=e.target as HTMLFormElement,f=new FormData(form),button=form.querySelector<HTMLButtonElement>('[type=submit]')!;button.disabled=true;
   try{await call('save_claude_ip',{service:String(f.get('service')),ip:String(f.get('ip')).trim(),status:String(f.get('status')),note:String(f.get('note')).trim(),attachCurrent:f.has('attach_current')});toast('IP 状态已保存');renderAi()}catch{}finally{button.disabled=false}
 });
-function paintAutostart(message?:string){const input=content.querySelector<HTMLInputElement>('[name=autostart]');if(input){input.checked=auto===true;input.disabled=auto===null||autoBusy;input.setAttribute('aria-busy',String(autoBusy));}const status=content.querySelector('#autostart-status');if(status)status.textContent=message||(autoBusy?'正在更新系统设置…':auto===null?'无法读取系统状态，请重新进入设置页重试。':'登录这台 Mac 后在菜单栏后台运行。切换立即生效，无需保存。');}
+function paintAutostart(message?:string){const input=content.querySelector<HTMLInputElement>('[name=autostart]');if(input){input.checked=auto===true;input.disabled=auto===null||autoBusy;input.setAttribute('aria-busy',String(autoBusy));}const status=content.querySelector('#autostart-status');if(status)status.textContent=message||(autoBusy?'正在更新系统设置…':auto===null?'无法读取系统状态，请重新进入设置页重试。':'登录这台电脑后在托盘后台运行。切换立即生效，无需保存。');}
 async function syncAutostart(){if(autoBusy)return;try{auto=await invoke<boolean>('get_autostart');paintAutostart()}catch(e){auto=null;paintAutostart();toast(`开机自启状态读取失败：${e}`)}}
 document.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;if(input.name!=='autostart'||autoBusy)return;const wanted=input.checked;autoBusy=true;paintAutostart();try{auto=await invoke<boolean>('set_autostart',{enabled:wanted});toast(auto?'已开启开机自启':'已关闭开机自启')}catch(e){try{auto=await invoke<boolean>('get_autostart')}catch{auto=null}toast(`开机自启设置失败：${e}`)}finally{autoBusy=false;paintAutostart()}});
 window.addEventListener('focus',()=>{if(tab==='settings')void syncAutostart()});

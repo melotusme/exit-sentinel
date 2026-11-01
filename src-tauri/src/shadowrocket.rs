@@ -48,7 +48,7 @@ pub fn upsert_node(
         || route.node_name.is_empty()
         || route.fingerprint.is_empty()
     {
-        return Err("当前节点未确认，暂不能登记；请核对 Shadowrocket 选择".into());
+        return Err("当前节点未确认，暂不能登记；请核对代理客户端选择".into());
     }
     if note.chars().count() > 500 {
         return Err("备注最多 500 字".into());
@@ -88,6 +88,7 @@ impl RouteSnapshot {
         )
     }
 }
+#[cfg(not(target_os = "windows"))]
 pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
     let service_owned = service.to_string();
     let result = tokio::task::spawn_blocking(move || {
@@ -135,7 +136,7 @@ pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
 pub fn correlate(before: &RouteSnapshot, mut after: RouteSnapshot) -> RouteSnapshot {
     after.association = "请求同期配置快照".into();
     if before.fingerprint != after.fingerprint || before.config != after.config {
-        after.error = "请求期间 Shadowrocket 选择发生变化，出口与节点无法关联".into();
+        after.error = "请求期间代理客户端选择发生变化，出口与节点无法关联".into();
         after.node_name.clear();
         after.node_id.clear();
         after.node_host.clear();
@@ -279,4 +280,9 @@ mod tests {
         assert_eq!(loaded[0].first_seen, "t1");
         assert_eq!(loaded[1].node_name, "node-b");
     }
+}
+
+#[cfg(target_os = "windows")]
+pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
+    crate::clash_verge::capture(service, proxy).await
 }

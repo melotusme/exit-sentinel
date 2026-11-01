@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
-use std::{path::Path, process::Command, time::Duration};
+use std::time::Duration;
 use tauri::Emitter;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -17,11 +17,20 @@ pub struct Available {
 
 async fn token() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(target_os = "windows")]
+        let gh_path = std::env::var_os("ProgramFiles")
+            .map(std::path::PathBuf::from)
+            .map(|p| p.join("GitHub CLI/gh.exe"))
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("gh.exe"));
+        #[cfg(target_os = "windows")]
+        let gh = gh_path.to_str().ok_or("GitHub CLI 路径编码无效")?;
+        #[cfg(not(target_os = "windows"))]
         let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
             .into_iter()
-            .find(|p| Path::new(p).is_file())
+            .find(|p| std::path::Path::new(p).is_file())
             .ok_or("私有更新需要 GitHub CLI：请安装 gh 并执行 gh auth login。")?;
-        let out = Command::new(gh)
+        let out = crate::command(gh)
             .args(["auth", "token", "--hostname", "github.com"])
             .output()
             .map_err(|_| "无法读取本机 GitHub 登录，请执行 gh auth login。")?;
@@ -116,10 +125,14 @@ pub async fn check_private_update(
         .map_err(|_| "私有更新清单格式异常。")?;
     // Never trust a manifest-provided URL with a credential. Resolve the asset
     // from this fixed repository and keep all credentials in the native process.
-    let package = asset(&release, "Exit.Sentinel.app.tar.gz")?;
     if let Some(platforms) = manifest["platforms"].as_object_mut() {
-        for platform in platforms.values_mut() {
-            platform["url"] = Value::String(package.clone());
+        for (key, platform) in platforms.iter_mut() {
+            let name = if key.starts_with("windows-") {
+                "Exit.Sentinel.windows.x64.exe"
+            } else {
+                "Exit.Sentinel.app.tar.gz"
+            };
+            platform["url"] = Value::String(asset(&release, name)?);
         }
     }
     let update = app

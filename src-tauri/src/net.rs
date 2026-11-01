@@ -1,10 +1,7 @@
 use crate::model::{parse_ip, public_ip, Probe};
 use reqwest::{Client, Proxy};
 use serde_json::{json, Value};
-use std::{
-    process::Command,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub fn client(proxy: &str, ipv6: bool) -> Result<Client, String> {
     let mut b = Client::builder()
@@ -126,7 +123,7 @@ pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
     p
 }
 fn output(bin: &str, args: &[&str]) -> String {
-    Command::new(bin)
+    crate::command(bin)
         .args(args)
         .output()
         .ok()
@@ -134,6 +131,7 @@ fn output(bin: &str, args: &[&str]) -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
 }
+#[cfg(not(target_os = "windows"))]
 pub fn network_snapshot() -> String {
     // scutil output has no timestamps; do not store DNS cache, cookies, or Wi-Fi credentials.
     let nwi = output("/usr/sbin/scutil", &["--nwi"]);
@@ -383,4 +381,19 @@ mod tests {
         assert!(places["places"].is_array());
         println!("PLACES {}", places);
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn network_snapshot() -> String {
+    let route = output("route.exe", &["print", "-4"]);
+    let proxy = output(
+        "reg.exe",
+        &[
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            "/v",
+            "ProxyServer",
+        ],
+    );
+    format!("Windows IPv4 路由\n{route}\n系统代理（仅展示，不执行 PAC）\n{proxy}")
 }
