@@ -1,0 +1,47 @@
+openapi: 3.0.3
+info:
+  title: Exit probe response shapes
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1
+paths:
+  /json:
+    get:
+      responses:
+        '200':
+          description: ipify public IP
+          content:
+            application/json:
+              example: {ip: '8.8.8.8'}
+  /trace:
+    get:
+      responses:
+        '200':
+          description: Cloudflare trace
+          content:
+            text/plain:
+              example: "ip=1.1.1.1\nloc=AU\ncolo=SYD\n"
+  /ipip:
+    get:
+      responses:
+        '200':
+          description: IPIP response
+          content:
+            text/plain:
+              example: '当前 IP：223.5.5.5  来自于：中国 北京 北京 移动'
+  /challenge:
+    get:
+      responses:
+        '200':
+          description: Proxy validation page is not an IP
+          content:
+            text/html:
+              example: '<html>Verify you are human</html>'
+  /limited:
+    get:
+      responses:
+        '429':
+          description: Rate limited upstream
+          content:
+            application/json:
+              example: {error: Too many requests}

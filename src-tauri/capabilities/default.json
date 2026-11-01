@@ -1,0 +1,33 @@
+{
+  "identifier": "default",
+  "description": "Only the local dashboard can access the app",
+  "windows": [
+    "main",
+    "diagnostics"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "notification:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://uri.amap.com/*"
+        },
+        {
+          "url": "https://www.google.com/maps/*"
+        },
+        {
+          "url": "https://www.openstreetmap.org/*"
+        },
+        {
+          "url": "https://support.claude.com/*"
+        }
+      ]
+    },
+    "autostart:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

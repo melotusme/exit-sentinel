@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Exit Sentinel",
+  "version": "0.2.1",
+  "identifier": "local.mhzrm.exit-sentinel",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "visible": false,
+        "title": "出口哨兵 · Exit Sentinel",
+        "width": 1120,
+        "height": 820,
+        "minWidth": 820,
+        "minHeight": 620
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "shortDescription": "国内外出口 IP 与网络变化监控",
+    "category": "public.app-category.utilities",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1M0Q1MjA4QUQyMUY0NjUKUldSbDlDR3RDRkk5dGQ2RGVYeENuaGgwa1Uyb0R1a0dXUUx4RlJvaGY3WFVad0Vnb1F2Y2J2NTcK",
+      "endpoints": [
+        "https://github.com/melotusme/exit-sentinel-releases/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

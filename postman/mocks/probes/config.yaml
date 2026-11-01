@@ -1,0 +1,11 @@
+version: 1
+id: 32fc1812-958c-4757-8b03-101b9f0b92fa
+name: Exit probe response shapes
+slug: exit-probe-response-shapes
+protocol: http
+interceptRequests: true
+port: 4500
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true
