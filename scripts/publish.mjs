@@ -13,6 +13,9 @@ const bundle=path.join(root,'src-tauri/target',process.env.SENTINEL_TARGET_TRIPL
 const archive=path.join(bundle,'macos/Exit Sentinel.app.tar.gz');
 const signature=archive+'.sig';
 if(!existsSync(archive)||!existsSync(signature))throw new Error('Build signed updater artifacts first.');
+const plist=spawnSync('tar',['-xOf',archive,'Exit Sentinel.app/Contents/Info.plist'],{encoding:'utf8'});
+const builtVersion=plist.stdout?.match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/)?.[1];
+if(plist.status!==0||builtVersion!==version)throw new Error(`Stale updater archive: expected ${version}, got ${builtVersion||'unknown'}`);
 const notesPath=process.argv[2];
 if(!notesPath)throw new Error('Usage: node scripts/publish.mjs <release-notes-file> [--prepare-only]');
 const notes=readFileSync(notesPath,'utf8');
