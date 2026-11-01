@@ -26,6 +26,7 @@ brew install gh
 gh auth login
 gh auth setup-git
 brew tap melotusme/exit-sentinel https://github.com/melotusme/homebrew-exit-sentinel.git
+brew trust --cask melotusme/exit-sentinel/exit-sentinel
 brew install --cask melotusme/exit-sentinel/exit-sentinel
 ```
 
