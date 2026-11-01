@@ -18,3 +18,12 @@
 Gitleaks 8.30.1 对实际准备提交的源码候选集扫描：0 个密钥发现。全目录扫描的两项命中来自已排除的历史 Rust 二进制依赖缓存；未作为源码发布。
 
 扫描与人工检查不构成绝对无敏感信息保证。后续发布需对实际提交集再次检查；不要把 settings.json、代理客户端数据库或诊断记录加入仓库。
+
+## 2026-11-01 发布实测
+
+- 私有源码和公开发布仓库的 Git 历史 Gitleaks 扫描均为 0 个密钥发现。
+- [GitHub Actions 发布任务](https://github.com/melotusme/exit-sentinel-releases/actions/runs/41257623204) 构建、测试、签名、发布全部通过。
+- 无认证访问公开 latest.json 与更新包成功；包内仅 9 个应用 bundle 条目，没有 settings.json、数据库或密钥文件。
+- 本机安装版从 0.2.0 经 GitHub 发现、下载、验签、安装并自动重启至 0.2.1；界面、Info.plist 和运行进程已核对。
+- 升级后 Apple codesign 验证通过（仍是 ad-hoc，不是公证）；监控设置及升级前所有人工节点 / IP 状态均保留。
+- 当前缓存定位 California / San Jose，出口卡片及 IP 详情显示非免税州；五个无州级销售税州、阿拉斯加地方税提示、普通州和未知字段由离线测试覆盖。
