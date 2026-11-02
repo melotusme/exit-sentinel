@@ -11,7 +11,7 @@ if(platform==='darwin-aarch64'){
   for(const suffix of ['', '.sig'])copyFileSync(path.join(bundle,'macos/Exit Sentinel.app.tar.gz'+suffix),path.join(out,asset+suffix));
   const dmg=readdirSync(path.join(bundle,'dmg')).filter(n=>n.endsWith('.dmg'));
   if(dmg.length!==1)throw new Error('Expected one DMG');
-  copyFileSync(path.join(bundle,'dmg',dmg[0]),path.join(out,dmg[0]));
+  copyFileSync(path.join(bundle,'dmg',dmg[0]),path.join(out,dmg[0].replaceAll(' ', '.')));
 }else{
   asset='Exit.Sentinel.windows.x64.exe';
   const exes=readdirSync(path.join(bundle,'nsis')).filter(n=>n.endsWith('-setup.exe'));
