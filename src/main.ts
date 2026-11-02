@@ -837,11 +837,12 @@ function renderAi() {
                 : '<p class="muted empty-test">尚未运行主动测试，点击右上方“测试 Claude 和 Gemini”获取实时路径结果。</p>'
             }
             <div class="section-head compact-head">
-              <h3>当前节点快照</h3>
+              <h3>${v.paused ? '上次读取的节点快照' : '当前节点快照'}</h3>
               <button type="button" data-copy-service="${esc(service)}" ${current?.node_name && !current.error ? '' : 'disabled'}>复制节点信息</button>
             </div>
+            ${v.paused ? '<p class="small muted" role="status">监控已暂停，节点信息可能过期；恢复监控后会重新读取代理客户端。</p>' : '<p class="small muted">监控运行时约每 5 秒重新读取；客户端升级后若格式不兼容，会显示读取错误。</p>'}
             ${routeSummary(current)}
-            ${nodeCurrent(current)}
+            ${v.paused ? '<p class="small muted">恢复监控后可登记当前节点。</p>' : nodeCurrent(current)}
             ${t?.route ? `<details class="network"><summary>查看本次测试的节点快照</summary>${routeSummary(t.route)}</details>` : ''}
           </section>`;
         })
@@ -863,7 +864,7 @@ function renderAi() {
           <select name="target" required>
             <option value="">请选择当前节点或已登记节点</option>
             ${(v.current_routes || [])
-              .filter(r => r.consistent && !r.error && r.node_name)
+              .filter(r => !v.paused && r.consistent && !r.error && r.node_name)
               .map(
                 r =>
                   `<option value="current:${esc(r.service)}:${esc(r.fingerprint)}">${r.service === 'claude' ? 'Claude' : 'Gemini'} · 当前 · ${esc(r.node_name)} · ${esc(r.config)}</option>`

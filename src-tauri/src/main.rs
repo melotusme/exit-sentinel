@@ -921,6 +921,9 @@ fn acknowledge(app: tauri::AppHandle, s: tauri::State<Shared>) {
 fn set_paused(paused: bool, app: tauri::AppHandle, s: tauri::State<Shared>) {
     {
         let mut d = lock(&s);
+        if d.view.paused && !paused {
+            d.view.current_routes.clear();
+        }
         d.view.paused = paused;
         d.generation += 1;
     }
@@ -1109,7 +1112,7 @@ async fn mark_node(
         };
         let route = shadowrocket::capture(service, &proxy).await;
         if route.fingerprint != key {
-            return Err("Shadowrocket 选择已变化，请刷新后登记当前节点".into());
+            return Err("代理客户端选择已变化或读取失败，请等待刷新后登记当前节点".into());
         }
         route
     } else {
@@ -1691,6 +1694,7 @@ fn main() {
                             {
                                 let mut d = lock(&s);
                                 d.view.paused = !d.view.paused;
+                                if !d.view.paused { d.view.current_routes.clear(); }
                                 d.generation += 1;
                             }
                             refresh(app, &s);
