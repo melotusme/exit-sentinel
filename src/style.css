@@ -1968,3 +1968,9 @@ dialog h3 {
     animation: none !important;
   }
 }
+
+/* Dependency states share the existing neutral surface and remain readable in both themes. */
+.route-unavailable { overflow-wrap: anywhere; }
+.route-unavailable strong { color: var(--text); }
+.route-unavailable p { margin: 8px 0; line-height: 1.5; }
+.node-empty-hint { margin: 0 0 16px; color: var(--text-secondary); line-height: 1.5; }

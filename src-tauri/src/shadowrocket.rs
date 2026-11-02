@@ -123,7 +123,7 @@ pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
             ..Default::default()
         },
     };
-    if !proxy.is_empty() && proxy != "direct" {
+    if snapshot.error.is_empty() && !proxy.is_empty() && proxy != "direct" {
         snapshot.error = "本次使用显式代理，无法将 Shadowrocket 配置作为请求路径归属".into();
         snapshot.consistent = false;
         snapshot.fingerprint = format!("explicit:{proxy}");

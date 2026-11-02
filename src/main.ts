@@ -281,7 +281,7 @@ function nodeRow(r: NodeRecord) {
 
 function nodeCurrent(r: RouteSnapshot | undefined) {
   if (!r || !r.consistent || r.error || !r.node_name)
-    return '<p class="small muted">当前节点未确认，暂不能登记。</p>';
+    return '<p class="small muted">当前节点未确认，暂不能登记；已保存的节点和 IP 记录仍可查看。</p>';
   const record = state?.ai_nodes?.find(n => n.service === r.service && n.key === r.fingerprint);
   return `<div class="node-current-bar">
     <span>节点状态：<strong>${record ? safetyText(record.status) : '未登记'}</strong> <small class="inline-muted">（无需 IP）</small></span>
@@ -453,11 +453,18 @@ function exitCard(group: string, title: string, en: string) {
 }
 
 function routeSummary(r: RouteSnapshot | null | undefined) {
+  if (r?.error && !r.node_name) {
+    return `<div class="route-snapshot route-unavailable" role="status">
+      <strong>节点快照不可用</strong>
+      <p>${esc(r.error)}</p>
+      <small>出口检测和已保存记录仍可使用；解决后重新检测。</small>
+    </div>`;
+  }
   return r
     ? `<div class="route-snapshot">
         <div class="snapshot-header">
           <strong>节点：${esc(r.node_name || '未确认')}</strong>
-          <span class="pill">${esc(r.mode || '规则')}</span>
+          ${r.mode ? `<span class="pill">${esc(r.mode)}</span>` : ''}
         </div>
         <p>配置：${esc(r.config || '未读取')}</p>
         <p class="small chain-text">${esc(r.chain.join(' → ') || '暂无策略链')}</p>
@@ -465,7 +472,7 @@ function routeSummary(r: RouteSnapshot | null | undefined) {
         <small>${esc(r.association)} · ${esc(r.basis)}</small>
         ${r.error ? `<p class="warning">${esc(r.error)}</p>` : ''}
       </div>`
-    : '<small class="empty-snapshot">暂无节点快照；请重新检测。</small>';
+    : '<p class="empty-snapshot">尚无节点快照。运行检测后可查看；出口检测不依赖节点快照。</p>';
 }
 
 function ipRow(r: IpRecord) {
@@ -830,8 +837,8 @@ function renderAi() {
                 : '<p class="muted empty-test">尚未运行主动测试，点击右上方“测试 Claude 和 Gemini”获取实时路径结果。</p>'
             }
             <div class="section-head compact-head">
-              <h3>当前代理客户端选择</h3>
-              <button type="button" data-copy-service="${esc(service)}" ${current ? '' : 'disabled'}>复制节点信息</button>
+              <h3>当前节点快照</h3>
+              <button type="button" data-copy-service="${esc(service)}" ${current?.node_name && !current.error ? '' : 'disabled'}>复制节点信息</button>
             </div>
             ${routeSummary(current)}
             ${nodeCurrent(current)}
@@ -849,6 +856,7 @@ function renderAi() {
         </div>
         <span class="pill">${(v.ai_nodes || []).length} 个节点</span>
       </div>
+      ${!(v.current_routes || []).some(r => r.consistent && !r.error && r.node_name) && !(v.ai_nodes || []).length ? '<p class="node-empty-hint">暂无可登记的节点。确认代理客户端配置后重新检测；也可以先在下方保存 IP 状态。</p>' : ''}
       <form id="ai-node-form" class="ai-form embedded-form">
         <label class="note-field">
           <span>服务与节点</span>

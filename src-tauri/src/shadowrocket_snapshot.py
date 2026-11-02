@@ -146,6 +146,10 @@ def snapshot(service):
 if __name__ == "__main__":
     try:
         print(json.dumps(snapshot(sys.argv[1]), ensure_ascii=False))
+    except FileNotFoundError:
+        print(json.dumps({"service": sys.argv[1], "error": "未找到 Shadowrocket 配置；可能尚未安装或完成首次配置。节点快照不可用，出口检测仍可使用。"}, ensure_ascii=False))
+    except PermissionError:
+        print(json.dumps({"service": sys.argv[1], "error": "无法读取 Shadowrocket 配置，请检查系统文件访问权限。出口检测仍可使用。"}, ensure_ascii=False))
     except Exception as error:
         # Only the exception type is emitted: paths / SQL / raw config may include secrets.
-        print(json.dumps({"service": sys.argv[1], "error": "Shadowrocket 快照读取失败（" + type(error).__name__ + "）"}, ensure_ascii=False))
+        print(json.dumps({"service": sys.argv[1], "error": "Shadowrocket 快照读取失败（" + type(error).__name__ + "）；请检查客户端配置。出口检测仍可使用。"}, ensure_ascii=False))

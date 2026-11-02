@@ -15,7 +15,7 @@ pub fn directory() -> Result<PathBuf, String> {
         std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Library/Application Support"));
     root.map(|p| p.join("io.github.clash-verge-rev.clash-verge-rev"))
         .filter(|p| p.is_dir())
-        .ok_or("未找到 Clash Verge Rev 配置目录".into())
+        .ok_or("未找到 Clash Verge Rev 配置；可能尚未安装或完成首次配置。节点快照不可用，出口检测仍可使用。".into())
 }
 pub fn yaml(name: &str) -> Result<Value, String> {
     let bytes = std::fs::read(directory()?.join(name))
