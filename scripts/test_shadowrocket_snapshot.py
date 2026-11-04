@@ -12,6 +12,19 @@ spec.loader.exec_module(module)
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_actual_connections_override_stale_config_and_keep_service_separate(self):
+        lines = '''[17:55:30.735] tcp stream <1> proxy lookup host => gemini.google.com:443 server => AnyTLS policy => 亚特兰大01 group => US手动选择
+[17:55:31.735] tcp stream <2> proxy lookup host => claude.ai:443 server => Vmess policy => PROXY group => 主代理
+[17:55:32.735] tcp stream <3> proxy lookup host => unrelated.googleapis.com:443 server => AnyTLS policy => Other group => Google
+[17:55:33.735] tcp stream <4> proxy lookup host => evilclaude.ai:443 server => Vmess policy => Wrong group => 主代理'''
+        claude = module.parse_connection_lines(lines, 'claude.ai', '20261104')
+        gemini = module.parse_connection_lines(lines, 'gemini.google.com', '20261104')
+        self.assertEqual(claude['policy'], 'PROXY')
+        self.assertEqual(gemini['policy'], '亚特兰大01')
+        self.assertEqual(gemini['group'], 'US手动选择')
+        self.assertIn('17:55:30', gemini['observed_at'])
+        self.assertIsNone(module.parse_connection_lines(lines, 'www.google.com', '20261104'))
+
     def test_nested_selection_and_automatic_groups(self):
         groups = module.parse_groups([("Claude", "select,主代理"), ("主代理", "select,PROXY"), ("Google", "select,Claude,policy-select-name=自动"), ("自动", "url-test,Node-A")])
         chain, node, _ = module.resolve_chain(groups, "CLAUDE", "Node-A")

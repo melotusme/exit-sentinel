@@ -4,10 +4,11 @@ macOS 菜单栏 / Windows 托盘应用，基于 Tauri 2。分别观测国内、�
 
 ## 功能
 
-- 国内 / 国外检测站独立监控；IPv6 可选。
+- 国内 / 国外 IPv4、IPv6 检测站独立监控；可设置是否要求 IPv6 可用。
 - IP 位置、ASN、运营商及保守网络类型参考，地理信息本地缓存。
 - 美国出口显示是否为无州级销售税州；阿拉斯加额外提示地方销售税。参见 [销售税规则](docs/SALES-TAX.md)。
-- Claude / Gemini 分别记录路径、IP、代理节点快照（macOS Shadowrocket / Windows Clash Verge Rev）及人工可用状态。
+- 概览页给出 Claude / Gemini 当前判定（可以使用 / 需要确认 / 有风险），由当前出口 IP、当前节点的人工状态和连通性合成，可一键标记。
+- Claude / Gemini 分别记录路径、IP、代理节点快照（macOS Shadowrocket / Windows Clash Verge Rev）及人工可用状态；导入的节点与实时节点按名称 + 服务器地址匹配。
 - 网站 curl 诊断：状态码、阶段耗时、原始请求与响应，支持复制。
 - 列表支持筛选、排序、分页和独立偏好记忆。
 - 菜单栏 / 设置页开机自启开关；关闭窗口后后台运行。

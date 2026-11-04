@@ -6,6 +6,7 @@ interface Options {
   sort: string;
   direction: 'asc' | 'desc';
 }
+const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
 export class ListView<T> {
   query = '';
@@ -41,24 +42,30 @@ export class ListView<T> {
     } catch {}
   }
 
-  render(records: T[], row: (r: T) => string) {
-    const e = escapeHtml;
+  pageData(records: T[]) {
+    const terms = this.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
     const rows = records.filter(
-      r =>
-        this.text(r).toLowerCase().includes(this.query.toLowerCase()) &&
-        (!this.filter || this.category(r) === this.filter)
+      r => {
+        if (this.filter && this.category(r) !== this.filter) return false;
+        const text = this.text(r).toLocaleLowerCase();
+        return terms.every(term => text.includes(term));
+      }
     );
     rows.sort(
       (a, b) =>
-        this.fields[this.options.sort]
-          .value(a)
-          .localeCompare(this.fields[this.options.sort].value(b), 'zh-CN', { numeric: true }) *
+        collator.compare(this.fields[this.options.sort].value(a), this.fields[this.options.sort].value(b)) *
         (this.options.direction === 'asc' ? 1 : -1)
     );
     const pages = Math.max(1, Math.ceil(rows.length / this.options.size));
     this.page = Math.max(1, Math.min(this.page, pages));
     const start = (this.page - 1) * this.options.size;
     const end = Math.min(rows.length, start + this.options.size);
+    return { rows, visible: rows.slice(start, end), pages, start, end };
+  }
+
+  render(records: T[], row: (r: T) => string) {
+    const e = escapeHtml;
+    const { rows, visible, pages, start, end } = this.pageData(records);
     const sortLabel = this.fields[this.options.sort]?.label || '';
     const arrow = this.options.direction === 'asc' ? '↑' : '↓';
 
@@ -68,14 +75,14 @@ export class ListView<T> {
           <span>关键字筛选</span>
           <div class="input-with-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input data-list-action="query" aria-label="关键字筛选" value="${e(this.query)}" placeholder="搜索 IP、节点、备注或内容…">
+            <input name="${this.id}-query" type="search" autocomplete="off" data-list-action="query" aria-label="关键字筛选" value="${e(this.query)}" placeholder="搜索 IP、节点、备注或内容…">
           </div>
         </label>
         ${
           Object.keys(this.filters).length
             ? `<label class="list-control">
                 <span>状态 / 类型</span>
-                <select data-list-action="filter">
+                <select name="${this.id}-filter" data-list-action="filter">
                   <option value="">全部</option>
                   ${Object.entries(this.filters)
                     .map(([k, v]) => `<option value="${e(k)}" ${this.filter === k ? 'selected' : ''}>${e(v)}</option>`)
@@ -86,7 +93,7 @@ export class ListView<T> {
         }
         <label class="list-control">
           <span>排序字段</span>
-          <select data-list-action="sort">
+          <select name="${this.id}-sort" data-list-action="sort">
             ${Object.entries(this.fields)
               .map(([k, v]) => `<option value="${e(k)}" ${this.options.sort === k ? 'selected' : ''}>${e(v.label)}</option>`)
               .join('')}
@@ -94,7 +101,7 @@ export class ListView<T> {
         </label>
         <label class="list-control">
           <span>排序方向</span>
-          <select data-list-action="direction">
+          <select name="${this.id}-direction" data-list-action="direction">
             <option value="asc" ${this.options.direction === 'asc' ? 'selected' : ''}>正序 ↑</option>
             <option value="desc" ${this.options.direction === 'desc' ? 'selected' : ''}>逆序 ↓</option>
           </select>
@@ -103,7 +110,7 @@ export class ListView<T> {
       <div class="list-rows">
         ${
           rows.length
-            ? rows.slice(start, end).map(row).join('')
+            ? visible.map(row).join('')
             : `<div class="empty">
                 <div class="empty-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -121,7 +128,7 @@ export class ListView<T> {
         <div class="list-pagination">
           <label class="page-size-label">
             <span>每页</span>
-            <select data-list-action="size">
+            <select name="${this.id}-size" data-list-action="size">
               ${[10, 20, 50, 100].map(n => `<option value="${n}" ${n === this.options.size ? 'selected' : ''}>${n} 条</option>`).join('')}
             </select>
           </label>

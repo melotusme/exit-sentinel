@@ -1,6 +1,6 @@
 [package]
 name = "exit-sentinel"
-version = "0.3.3"
+version = "0.3.4"
 description = "A private macOS and Windows split-route egress monitor"
 edition = "2021"
 
@@ -29,3 +29,4 @@ base64 = "0.22"
 sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 arboard = { version = "3", default-features = false }
+flate2 = "1"

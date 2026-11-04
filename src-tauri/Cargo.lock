@@ -1097,12 +1097,13 @@ dependencies = [
 
 [[package]]
 name = "exit-sentinel"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aes-gcm",
  "arboard",
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "futures",
  "keyring",
  "reqwest 0.12.28",

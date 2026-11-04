@@ -41,6 +41,7 @@ const esc = (s: unknown) =>
 
 let state: DiagState = { running: false, selected: 'baidu', reports: {}, error: null },
   selected = 'baidu',
+  family = 'auto',
   section = 'trace',
   message = '';
 
@@ -51,13 +52,13 @@ export function getDiagnosticsState() {
   return {
     state,
     selected,
-    testedCount: Object.keys(state.reports || {}).length,
+    testedCount: sites.filter(([id]) => state.reports[family === 'auto' ? id : `${id}@${family}`]).length,
     totalCount: sites.length,
   };
 }
 
 export function renderDiagnosticsTab(): string {
-  const r = state.reports[selected],
+  const r = state.reports[family === 'auto' ? selected : `${selected}@${family}`],
     m = r?.metrics || {};
   const status = !r
     ? '尚未测试'
@@ -88,9 +89,9 @@ export function renderDiagnosticsTab(): string {
       <div class="curl-sites" role="group" aria-label="测试站点">
         ${sites
           .map(([id, name, routeTag]) => {
-            const rep = state.reports[id];
+            const rep = state.reports[family === 'auto' ? id : `${id}@${family}`];
             const ok = rep && [0, 63].includes(rep.exit_code) && Number(rep.metrics?.http_code) < 400;
-            return `<button type="button" data-site="${id}" class="chip-btn ${selected === id ? 'selected' : ''}">
+            return `<button type="button" data-site="${id}" aria-pressed="${selected === id}" class="chip-btn ${selected === id ? 'selected' : ''}">
               <span class="site-chip-name">${name}</span>
               <span class="site-route-tag">${routeTag}</span>
               ${rep ? `<span class="result-dot ${ok ? 'ok' : 'bad'}" title="${ok ? '连通正常' : '连接异常'}"></span>` : ''}
@@ -99,6 +100,7 @@ export function renderDiagnosticsTab(): string {
           .join('')}
       </div>
       <div class="curl-actions">
+        ${[['auto', '自动'], ['4', 'IPv4'], ['6', 'IPv6']].map(([id, label]) => `<button type="button" data-family="${id}" aria-pressed="${family === id}" ${state.running ? 'disabled' : ''}>${label}</button>`).join('')}
         <button type="button" id="curl-run" class="primary" ${state.running ? 'disabled' : ''}>${state.running ? '正在执行 curl…' : '测试当前站点'}</button>
         <button type="button" id="curl-all" ${state.running ? 'disabled' : ''}>全部测试 (8)</button>
       </div>
@@ -113,8 +115,9 @@ export function renderDiagnosticsTab(): string {
           </div>
           ${r ? `<span class="curl-timestamp">${esc(new Date(r.time).toLocaleString('zh-CN', { hour12: false }))}</span>` : ''}
         </div>
-        <div class="curl-target">${esc(r?.url || '选择上方预置站点（或点击“测试当前站点”）开始系统级 curl 诊断。')}</div>
-        ${r ? `<p class="curl-note">${esc(r.path)} · GET · 最多 15 秒 · HTTPS 证书校验</p>` : ''}
+        <div class="curl-target">${esc(r?.url || '选择上方站点，再点击“测试当前站点”。')}</div>
+        ${r ? `<p class="curl-note">${esc(r.path)} · ${family === 'auto' ? '自动' : `IPv${family}`} · GET · 最多 15 秒 · HTTPS 证书校验</p>` : ''}
+        <p class="curl-note">地址族约束适用于 curl 建立连接的对端；使用代理时，该对端可能是代理，不能确认代理到目标的协议。</p>
 
         <div class="curl-waterfall">
           <div class="waterfall-title">阶段耗时分布</div>
@@ -178,7 +181,7 @@ export function renderDiagnosticsTab(): string {
               ['metrics', '完整指标'],
               ['command', 'curl 命令'],
             ]
-              .map(([id, label]) => `<button type="button" data-section="${id}" class="tab-btn ${section === id ? 'selected' : ''}">${label}</button>`)
+              .map(([id, label]) => `<button type="button" data-section="${id}" aria-pressed="${section === id}" class="tab-btn ${section === id ? 'selected' : ''}">${label}</button>`)
               .join('')}
           </div>
           <div class="curl-copy-group">
@@ -212,11 +215,15 @@ export async function handleDiagnosticsClick(
   onRender: () => void,
   onToast: (msg: string) => void
 ): Promise<boolean> {
+  if (b.dataset.family) {
+    family = b.dataset.family;
+    onRender();
+    return true;
+  }
   if (b.dataset.site) {
     selected = b.dataset.site;
     message = '';
     onRender();
-    if (!state.running) await invoke('run_diagnostics', { site: selected });
     return true;
   }
   if (b.dataset.section) {
@@ -227,11 +234,12 @@ export async function handleDiagnosticsClick(
   }
   if (b.id === 'curl-run' || b.id === 'curl-all') {
     message = '';
-    await invoke('run_diagnostics', { site: b.id === 'curl-all' ? 'all' : selected });
+    const site = b.id === 'curl-all' ? 'all' : selected;
+    await invoke('run_diagnostics', { site: family === 'auto' ? site : `${site}@${family}` });
     return true;
   }
   if (b.id === 'curl-copy' || b.id === 'curl-copy-all') {
-    await invoke('copy_diagnostics', { site: selected, section: b.id === 'curl-copy-all' ? 'all' : section });
+    await invoke('copy_diagnostics', { site: family === 'auto' ? selected : `${selected}@${family}`, section: b.id === 'curl-copy-all' ? 'all' : section });
     message = '已复制到剪贴板';
     onToast('curl 诊断内容已复制到剪贴板');
     onRender();

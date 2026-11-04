@@ -4,6 +4,23 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 pub fn client(proxy: &str, ipv6: bool) -> Result<Client, String> {
+    client_for_probe(proxy, ipv6, false)
+}
+fn client_for_probe(proxy: &str, ipv6: bool, force_v6_direct: bool) -> Result<Client, String> {
+    let mut b = client_builder(proxy)?;
+    // Force IPv4 for comparable primary probes; IPv6 is a separate optional observation.
+    if !ipv6 {
+        b = b.local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    } else if force_v6_direct && proxy == "direct" {
+        b = b.local_address(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
+    }
+    b.build().map_err(|e| format!("无法建立检测客户端：{e}"))
+}
+// Website availability uses the usable address family; IP probes remain independent.
+pub fn connectivity_client(proxy: &str) -> Result<Client, String> {
+    client_builder(proxy)?.build().map_err(|_| "无法建立连通性检测客户端".into())
+}
+fn client_builder(proxy: &str) -> Result<reqwest::ClientBuilder, String> {
     let mut b = Client::builder()
         .timeout(Duration::from_secs(12))
         .connect_timeout(Duration::from_secs(6))
@@ -16,14 +33,10 @@ pub fn client(proxy: &str, ipv6: bool) -> Result<Client, String> {
             .no_proxy()
             .proxy(Proxy::all(proxy).map_err(|_| "无法配置代理")?);
     }
-    // Force IPv4 for comparable primary probes; IPv6 is a separate optional observation.
-    if !ipv6 {
-        b = b.local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-    }
-    b.build().map_err(|e| format!("无法建立检测客户端：{e}"))
+    Ok(b)
 }
-pub fn probes(ipv6: bool) -> Vec<Probe> {
-    let mut items = vec![
+pub fn probes(_ipv6: bool) -> Vec<Probe> {
+    let items = vec![
         (
             "cn-ipip",
             "国内 · IPIP",
@@ -43,15 +56,9 @@ pub fn probes(ipv6: bool) -> Vec<Probe> {
             "foreign",
             "https://api.ipify.org?format=json",
         ),
+        ("cn-v6", "国内 · IPv6", "domestic6", "https://6.ipw.cn"),
+        ("global-v6", "国外 · IPv6", "foreign6", "https://api6.ipify.org?format=json"),
     ];
-    if ipv6 {
-        items.push((
-            "global-v6",
-            "国外 · IPv6（可选）",
-            "ipv6",
-            "https://api6.ipify.org?format=json",
-        ));
-    }
     items
         .into_iter()
         .map(|(id, label, group, url)| Probe {
@@ -66,7 +73,8 @@ pub fn probes(ipv6: bool) -> Vec<Probe> {
 pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
     let start = Instant::now();
     let result = async {
-        let c = client(&proxy, p.group == "ipv6")?;
+        let v6 = p.group.ends_with('6') || p.group == "ipv6";
+        let c = client_for_probe(&proxy, v6, true)?;
         let response = c.get(&p.url).send().await.map_err(|e| {
             if e.is_timeout() {
                 "连接超时（12 秒）".into()
@@ -89,7 +97,7 @@ pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
             return Err("Claude trace 响应域名不匹配，出口未确认".into());
         }
         let ip = parse_ip(&body)?;
-        if (p.group == "ipv6") != ip.contains(':') {
+        if v6 != ip.contains(':') {
             return Err("返回地址族与检测项不一致".into());
         }
         let detail = if p.id == "cn-ipip" {
@@ -131,6 +139,100 @@ fn output(bin: &str, args: &[&str]) -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
 }
+
+/// Local source addresses of the default IPv4 / IPv6 routes. A UDP connect only asks the
+/// kernel for a route: no packet is sent and no child process is started.
+pub fn quick_signature() -> String {
+    use std::net::UdpSocket;
+    let local = |bind: &str, target: &str| {
+        UdpSocket::bind(bind)
+            .and_then(|s| {
+                s.connect(target)?;
+                s.local_addr()
+            })
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default()
+    };
+    format!(
+        "{}|{}",
+        local("0.0.0.0:0", "1.1.1.1:53"),
+        local("[::]:0", "[2606:4700:4700::1111]:53")
+    )
+}
+
+/// The full snapshot runs several system commands. Take it every 15 s, or right away when the
+/// quick signature moves, then a couple of ticks in a row so the change tracker can confirm it.
+const FULL_SNAPSHOT_EVERY: Duration = Duration::from_secs(15);
+const CONFIRM_TICKS: u8 = 2;
+#[derive(Default)]
+pub struct NetworkSampler {
+    quick: Option<String>,
+    last_value: Option<String>,
+    last_full: Option<Instant>,
+    burst: u8,
+}
+impl NetworkSampler {
+    pub fn full_due(&mut self, quick: &str, force: bool) -> bool {
+        if self.quick.as_deref().is_some_and(|q| q != quick) {
+            self.burst = CONFIRM_TICKS + 1;
+        }
+        self.quick = Some(quick.to_string());
+        let due = force
+            || self.burst > 0
+            || self.last_full.map_or(true, |t| t.elapsed() >= FULL_SNAPSHOT_EVERY);
+        self.burst = self.burst.saturating_sub(1);
+        due
+    }
+    pub fn record_full(&mut self, full: &str) {
+        if self.last_value.as_deref().is_some_and(|v| v != full) {
+            self.burst = self.burst.max(CONFIRM_TICKS);
+        }
+        self.last_value = Some(full.to_string());
+        self.last_full = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod sampler_tests {
+    use super::NetworkSampler;
+
+    #[test]
+    fn steady_network_skips_full_snapshot() {
+        let mut s = NetworkSampler::default();
+        assert!(s.full_due("a", false));
+        s.record_full("net");
+        assert!(!s.full_due("a", false));
+        assert!(!s.full_due("a", false));
+    }
+
+    #[test]
+    fn quick_change_samples_enough_ticks_to_confirm() {
+        let mut s = NetworkSampler::default();
+        assert!(s.full_due("a", false));
+        s.record_full("net");
+        assert!(s.full_due("b", false));
+        s.record_full("net2");
+        assert!(s.full_due("b", false));
+        s.record_full("net2");
+    }
+
+    #[test]
+    fn slow_full_change_gets_a_follow_up_sample() {
+        let mut s = NetworkSampler::default();
+        assert!(s.full_due("a", false));
+        s.record_full("net");
+        s.record_full("proxy-changed");
+        assert!(s.full_due("a", false));
+    }
+
+    #[test]
+    fn manual_check_forces_full_snapshot() {
+        let mut s = NetworkSampler::default();
+        assert!(s.full_due("a", false));
+        s.record_full("net");
+        assert!(s.full_due("a", true));
+    }
+}
 #[cfg(not(target_os = "windows"))]
 pub fn network_snapshot() -> String {
     // scutil output has no timestamps; do not store DNS cache, cookies, or Wi-Fi credentials.
@@ -142,7 +244,9 @@ pub fn network_snapshot() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     let proxy = output("/usr/sbin/scutil", &["--proxy"]);
-    format!("{nwi}\n\n默认路由\n{route}\n\nmacOS 系统代理（仅展示，不自动导入 PAC）\n{proxy}")
+    let route6 = output("/sbin/route", &["-n", "get", "-inet6", "default"]);
+    let route6 = route6.lines().filter(|l| l.contains("interface:") || l.contains("gateway:")).collect::<Vec<_>>().join("\n");
+    format!("{nwi}\n\nIPv4 默认路由\n{route}\n\nIPv6 默认路由\n{route6}\n\nmacOS 系统代理（仅展示，不自动导入 PAC）\n{proxy}")
 }
 pub async fn geo(ip: &str, proxy: &str) -> Result<Value, String> {
     let ip = public_ip(ip)?;
@@ -173,6 +277,26 @@ pub async fn geo(ip: &str, proxy: &str) -> Result<Value, String> {
         return Err("IP 详情响应地址不匹配".into());
     }
     Ok(v)
+}
+/// Forward-geocode one user-typed address with OpenStreetMap Nominatim (single, user-triggered
+/// request; the caller throttles). English names keep regions comparable with the place table.
+pub async fn geocode(query: &str, proxy: &str) -> Result<Value, String> {
+    let c = client(proxy, true)?;
+    let v: Value = c
+        .get("https://nominatim.openstreetmap.org/search")
+        .query(&[("format", "jsonv2"), ("q", query), ("addressdetails", "1"), ("limit", "1"), ("accept-language", "en")])
+        .send()
+        .await
+        .map_err(|_| "地址查询超时或不可达，请稍后重试")?
+        .error_for_status()
+        .map_err(|_| "OpenStreetMap 服务繁忙或限流，请稍后重试")?
+        .json()
+        .await
+        .map_err(|_| "地址服务响应无效")?;
+    v.as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .ok_or_else(|| "没有找到这个地址，请换一种写法（如城市名、州名或完整地址）".into())
 }
 pub async fn nearby(lat: f64, lon: f64, proxy: &str) -> Result<Value, String> {
     if !lat.is_finite()
@@ -386,6 +510,7 @@ mod tests {
 #[cfg(target_os = "windows")]
 pub fn network_snapshot() -> String {
     let route = output("route.exe", &["print", "-4"]);
+    let route6 = output("route.exe", &["print", "-6"]);
     let proxy = output(
         "reg.exe",
         &[
@@ -395,5 +520,5 @@ pub fn network_snapshot() -> String {
             "ProxyServer",
         ],
     );
-    format!("Windows IPv4 路由\n{route}\n系统代理（仅展示，不执行 PAC）\n{proxy}")
+    format!("Windows IPv4 路由\n{route}\nWindows IPv6 路由\n{route6}\n系统代理（仅展示，不执行 PAC）\n{proxy}")
 }

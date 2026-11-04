@@ -1,0 +1,22 @@
+.search-select-native{position:absolute!important;width:1px!important;height:1px!important;clip-path:inset(50%);overflow:hidden;pointer-events:none;opacity:0}
+.search-select-trigger{width:100%;text-align:start;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-inline-end:32px;position:relative;font-weight:500}
+.search-select-trigger::after{content:'⌄';position:absolute;inset-inline-end:12px;top:50%;transform:translateY(-50%);color:var(--muted)}
+.choice-dialog{width:min(720px,calc(100vw - 32px));max-height:calc(100vh - 48px);padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);overflow:auto;box-shadow:0 20px 80px #0003}
+.choice-dialog::backdrop{background:#11182766}
+.choice-dialog header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+.choice-dialog h2{margin:0;font-size:20px}
+.choice-search,.choice-group{display:grid;gap:6px;margin-bottom:12px;font-size:13px;color:var(--muted)}
+.choice-search input{width:100%}
+.choice-order{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px}
+.choice-order button{padding:6px 10px;min-height:32px}
+.choice-order button[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:var(--primary-tonal)}
+.choice-count{font-size:13px;color:var(--muted);margin:12px 0}
+.choice-results{display:grid;gap:6px;min-height:60px;max-height:48vh;overflow:auto;overscroll-behavior:contain}
+.choice-row{display:flex;flex-direction:column;align-items:stretch;text-align:start;gap:5px;padding:12px 36px 12px 14px;position:relative;white-space:normal;overflow-wrap:anywhere;min-height:48px;font-weight:400}
+.choice-row strong{font-size:14px;font-weight:600}
+.choice-row small{font-size:12px;color:var(--muted)}
+.choice-row[aria-pressed=true]{border-color:var(--accent);background:var(--primary-tonal)}
+.choice-check{position:absolute;inset-inline-end:14px;top:14px;color:var(--accent)}
+.choice-pages{display:flex;justify-content:center;align-items:center;gap:8px;margin-top:16px;flex-wrap:wrap;font-size:13px}
+.choice-pages button{padding:6px 10px;min-height:32px}
+@media(max-width:600px){.choice-dialog{padding:16px}.choice-results{max-height:44vh}}

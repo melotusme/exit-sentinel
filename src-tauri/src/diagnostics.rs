@@ -9,7 +9,7 @@ use tauri::{Emitter, Manager};
 pub const SITES: &[(&str, &str, &str, &str)] = &[
     ("baidu", "百度", "https://www.baidu.com/", "domestic"),
     ("bing", "必应中国", "https://cn.bing.com/", "domestic"),
-    ("google", "Google", "https://www.google.com/", "foreign"),
+    ("google", "Google", "https://www.google.com/", "gemini"),
     (
         "cloudflare",
         "Cloudflare",
@@ -39,6 +39,8 @@ pub struct Report {
 }
 #[derive(Clone, Default, Serialize)]
 pub struct State {
+    #[serde(skip)]
+    generation: u64,
     pub running: bool,
     pub selected: String,
     pub reports: BTreeMap<String, Report>,
@@ -61,6 +63,9 @@ impl Drop for Scratch {
 }
 
 pub fn execute(id: &str, name: &str, url: &str, proxy: &str) -> Result<Report, String> {
+    execute_family(id, name, url, proxy, "auto")
+}
+fn execute_family(id: &str, name: &str, url: &str, proxy: &str, family: &str) -> Result<Report, String> {
     let folder = std::env::temp_dir().join(format!(
         "sentinel-curl-{}-{}",
         std::process::id(),
@@ -98,6 +103,8 @@ pub fn execute(id: &str, name: &str, url: &str, proxy: &str) -> Result<Report, S
         "--user-agent".into(),
         "ExitSentinel/0.1 curl-network-test".into(),
     ];
+    if family == "4" { args.push("--ipv4".into()); }
+    if family == "6" { args.push("--ipv6".into()); }
     if proxy == "direct" {
         args.extend(["--noproxy".into(), "*".into()]);
     } else if !proxy.is_empty() {
@@ -168,21 +175,34 @@ fn publish(app: &tauri::AppHandle, shared: &Shared) {
     let state = shared.0.lock().unwrap().clone();
     let _ = app.emit("diagnostics-state", state);
 }
+pub fn clear(app: &tauri::AppHandle) {
+    let shared = app.state::<Shared>();
+    {
+        let mut state = shared.0.lock().unwrap();
+        let generation = state.generation + 1;
+        *state = State { generation, ..Default::default() };
+    }
+    publish(app, &shared);
+}
 pub fn show_popup(app: &tauri::AppHandle) {
     crate::show(app);
     let _ = app.emit("open-diagnostics", ());
 }
 pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    let (id, family) = id.split_once('@').unwrap_or((id, "auto"));
+    if !["auto", "4", "6"].contains(&family) { return Err("未知地址族".into()); }
     if id != "all" && id != "ai" && !SITES.iter().any(|s| s.0 == id) {
         return Err("未知检测站点".into());
     }
     let shared = app.state::<Shared>().inner().clone();
+    let generation;
     {
         let mut state = shared.0.lock().unwrap();
         if state.running {
             return Err("已有测试正在进行，请等待完成".into());
         }
         state.running = true;
+        generation = state.generation;
         state.error = None;
         state.selected = if id == "ai" {
             "claude".into()
@@ -199,10 +219,12 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
         .clone();
     let app = app.clone();
     let id = id.to_string();
+    let family = family.to_string();
     tauri::async_runtime::spawn(async move {
         for &(site, name, url, group) in SITES.iter().filter(|s| {
             id == "all" || (id == "ai" && ["claude", "gemini"].contains(&s.0)) || s.0 == id
         }) {
+            if shared.0.lock().unwrap().generation != generation { return; }
             let proxy = match group {
                 "domestic" => &settings.domestic_proxy,
                 "claude" => &settings.claude_proxy,
@@ -210,14 +232,17 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
                 _ => &settings.foreign_proxy,
             }
             .clone();
+            let key = if family == "auto" { site.to_string() } else { format!("{site}@{family}") };
+            let family = family.clone();
             let result =
-                tauri::async_runtime::spawn_blocking(move || execute(site, name, url, &proxy))
+                tauri::async_runtime::spawn_blocking(move || execute_family(site, name, url, &proxy, &family))
                     .await;
             {
                 let mut state = shared.0.lock().unwrap();
+                if state.generation != generation { return; }
                 match result {
                     Ok(Ok(report)) => {
-                        state.reports.insert(site.into(), report);
+                        state.reports.insert(key, report);
                     }
                     Ok(Err(error)) => state.error = Some(error),
                     Err(e) => state.error = Some(e.to_string()),
@@ -225,7 +250,11 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
             }
             publish(&app, &shared);
         }
-        shared.0.lock().unwrap().running = false;
+        {
+            let mut state = shared.0.lock().unwrap();
+            if state.generation != generation { return; }
+            state.running = false;
+        }
         publish(&app, &shared);
     });
     Ok(())

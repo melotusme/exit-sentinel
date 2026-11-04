@@ -4,6 +4,7 @@ use std::net::IpAddr;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Settings {
+    pub manual_nodes_only: bool,
     pub interval: u64,
     pub claude_proxy: String,
     pub gemini_proxy: String,
@@ -11,12 +12,14 @@ pub struct Settings {
     pub notifications: bool,
     pub retain_history: bool,
     pub ipv6: bool,
+    pub ipv6_required: bool,
     pub domestic_proxy: String,
     pub foreign_proxy: String,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            manual_nodes_only: false,
             interval: 30,
             claude_proxy: String::new(),
             gemini_proxy: String::new(),
@@ -24,6 +27,7 @@ impl Default for Settings {
             notifications: true,
             retain_history: true,
             ipv6: false,
+            ipv6_required: false,
             domestic_proxy: String::new(),
             foreign_proxy: String::new(),
         }

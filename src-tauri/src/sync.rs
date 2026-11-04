@@ -9,7 +9,7 @@ use tauri::Manager;
 const FILE: &str = "exit-sentinel-v1.json";
 const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Default)]
-pub struct State(tokio::sync::Mutex<()>);
+pub struct State(pub(crate) tokio::sync::Mutex<()>);
 #[derive(Default, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {

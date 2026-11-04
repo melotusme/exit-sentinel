@@ -201,7 +201,7 @@
   height: 100%;
   background: var(--primary);
   border-radius: 999px;
-  transition: width 0.25s ease;
+
 }
 
 .waterfall-val {
@@ -338,4 +338,13 @@
   .curl-raw pre {
     height: 320px;
   }
+}
+
+@media (max-width: 760px) {
+  .curl-summary,.curl-raw,.curl-toolbar { padding: 16px; }
+  .curl-main { grid-template-columns: minmax(0,1fr); }
+  .curl-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .waterfall-row { grid-template-columns: 68px minmax(0,1fr) 64px; gap: 6px; }
+  .curl-waterfall { padding: 12px 10px; }
+  .curl-raw pre { height: 300px; padding: 12px; }
 }

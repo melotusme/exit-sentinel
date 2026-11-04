@@ -26,8 +26,17 @@ pub struct IpRecord {
 pub struct Monitor {
     pub route: Option<crate::shadowrocket::RouteSnapshot>,
     pub running: Option<bool>,
+    /// Process heartbeat (every few seconds).
     pub checked: String,
+    /// Time of the last same-path exit IP probe.
+    pub checked_ip: String,
+    /// Gemini only: country Google assigns to this path (ISO alpha-3, e.g. "USA", "CHN").
+    pub country: String,
+    pub country_checked: String,
+    pub country_error: Option<String>,
     pub ip: Option<String>,
+    pub ipv6: Option<String>,
+    pub ipv6_error: Option<String>,
     pub source: String,
     pub error: Option<String>,
 }
@@ -126,6 +135,10 @@ pub struct ServiceTest {
     pub service: String,
     pub time: String,
     pub ip: Option<String>,
+    #[serde(default)]
+    pub ipv6: Option<String>,
+    #[serde(default)]
+    pub ipv6_basis: String,
     pub ip_basis: String,
     pub http_code: Option<u16>,
     pub latency: u64,
@@ -164,7 +177,7 @@ pub async fn test_service(service: &str, settings: &crate::model::Settings) -> S
         },
         ..Default::default()
     };
-    let before = crate::shadowrocket::capture(service, proxy).await;
+    let before = crate::shadowrocket::selected_capture(service, proxy, settings.manual_nodes_only).await;
     let start = std::time::Instant::now();
     let client = match crate::net::client(proxy, false) {
         Ok(c) => c,
@@ -197,8 +210,18 @@ pub async fn test_service(service: &str, settings: &crate::model::Settings) -> S
         if let Some(e) = p.error {
             report.ip_basis = format!("{}；出口检测失败：{e}", report.ip_basis);
         }
+        let v6 = crate::model::Probe { id: service.into(), url: echo.into(), group: "foreign6".into(), ..Default::default() };
+        let v6 = crate::net::run_probe(v6, proxy.clone()).await;
+        report.ipv6 = v6.ip;
+        report.ipv6_basis = match v6.error {
+            Some(e) => format!("IPv6 出口未确认：{e}"),
+            None if service == "claude" => "claude.ai 同域名 trace 观测到 IPv6；仅代表本应用请求".into(),
+            None => "参考检测站观测到 IPv6；需确认与 Google 策略一致".into(),
+        };
+    } else {
+        report.ipv6_basis = "未配置同策略出口检测，IPv6 未确认".into();
     }
-    let after = crate::shadowrocket::capture(service, proxy).await;
+    let after = crate::shadowrocket::selected_capture(service, proxy, settings.manual_nodes_only).await;
     report.route = Some(crate::shadowrocket::correlate(&before, after));
     report
 }
