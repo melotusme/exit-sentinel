@@ -162,11 +162,11 @@ fn derive_status(v: &View) -> String {
         return "starting".into();
     }
     let good = core.iter().filter(|p| p.ip.is_some()).count();
-    if good == 0 {
-        return if v.probes.iter().any(|p| p.ip.is_some()) { "degraded" } else { "offline" }.into();
+    if good == 0 && !v.probes.iter().any(|p| p.ip.is_some()) {
+        return "offline".into();
     }
     if good < core.len() || v.service_health.iter().any(|r| r.has_confirmed_problem()) {
-        return "degraded".into();
+        return degraded_status(&v.verdicts).into();
     }
     if v.unacknowledged {
         return "changed".into();
@@ -179,11 +179,17 @@ fn derive_status(v: &View) -> String {
         "stable".into()
     }
 }
+/// Secondary checks failing should not hide that Claude and Gemini are confirmed usable.
+fn degraded_status(verdicts: &[verdict::Verdict]) -> &'static str {
+    let ai_usable = !verdicts.is_empty() && verdicts.iter().all(|x| x.level == verdict::Level::Safe);
+    if ai_usable { "usable" } else { "degraded" }
+}
 fn label(s: &str) -> &str {
     match s {
         "paused" => "已暂停",
         "offline" => "所有检测站不可达",
         "degraded" => "部分检测异常",
+        "usable" => "可以使用 · 部分辅助检测异常",
         "changed" => "变化待确认",
         "split" => "多个出口 · 正常监控",
         "stable" => "出口一致 · 正常监控",
@@ -195,7 +201,7 @@ fn tray_image(status: &str) -> Image<'static> {
     let color = match status {
         "offline" => [240, 82, 82, 255],
         "changed" | "degraded" => [240, 174, 50, 255],
-        "stable" | "split" => [62, 205, 148, 255],
+        "stable" | "split" | "usable" => [62, 205, 148, 255],
         _ => [155, 163, 175, 255],
     };
     for y in 0..36i32 {
@@ -269,8 +275,8 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
     let autostart = app.autolaunch().is_enabled().ok();
     let v = {
         let mut d = lock(s);
-        d.view.status = derive_status(&d.view);
         d.view.verdicts = compute_verdicts(&d.view);
+        d.view.status = derive_status(&d.view);
         d.view.clone()
     };
     emit_state(app, s, &v);
@@ -1189,5 +1195,28 @@ mod cache_tests {
         assert_eq!(g["network_type"]["idc"], "是（ASN 参考）");
         assert!(lock(&restarted).geo_attempts.is_empty());
         std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn verdict(level: verdict::Level) -> verdict::Verdict {
+        verdict::Verdict { level, ..Default::default() }
+    }
+
+    #[test]
+    fn degraded_stays_green_when_ai_services_are_confirmed_usable() {
+        let both_safe = [verdict(verdict::Level::Safe), verdict(verdict::Level::Safe)];
+        assert_eq!(degraded_status(&both_safe), "usable");
+    }
+
+    #[test]
+    fn degraded_warns_when_any_ai_service_is_not_confirmed() {
+        let mixed = [verdict(verdict::Level::Safe), verdict(verdict::Level::Warn)];
+        assert_eq!(degraded_status(&mixed), "degraded");
+        assert_eq!(degraded_status(&[verdict(verdict::Level::Unknown)]), "degraded");
+        assert_eq!(degraded_status(&[]), "degraded");
     }
 }
