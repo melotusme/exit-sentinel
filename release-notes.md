@@ -1,3 +1,10 @@
+## 0.5.0
+
+- 新增 Linux x86_64 版本（AppImage），面向 Omarchy / Arch，支持托盘、通知、开机自启和应用内升级。
+- Linux 自动读取 Clash Verge Rev 节点：支持 HTTP 控制器和 Mihomo 本机 Unix socket；首次启动按实际 mixed-port 预填检测代理。
+- Linux 网络快照显示接口、默认路由和环境代理变量（自动去除账号密码）；WebDAV 密码保存在系统密钥环。
+- Release 附带 `install-linux.sh`：校验 SHA-256、备份旧版和设置后安装，并注册启动器图标。
+
 ## 0.4.0
 
 - 概览页改为 Claude / Gemini 当前判定（可以使用 / 需要确认 / 有风险），由当前出口 IP、当前节点的登记状态和连通性合成，卡片和菜单栏都能一键标记 IP 或节点。
