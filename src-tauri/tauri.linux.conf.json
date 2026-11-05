@@ -1,0 +1,1 @@
+{"bundle":{"targets":["appimage"],"icon":["icons/icon.png"],"category":"Utility","linux":{"appimage":{"bundleMediaFramework":false}}}}

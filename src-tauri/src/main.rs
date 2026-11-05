@@ -864,6 +864,12 @@ fn command(program: &str) -> std::process::Command {
     cmd
 }
 fn main() {
+    // WebKitGTK's DMA-BUF renderer shows a blank window on many Wayland/NVIDIA setups
+    // (e.g. Hyprland on Omarchy). Respect an explicit user value.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     let autostart = tauri_plugin_autostart::Builder::new();
     #[cfg(target_os = "macos")]
     let autostart = autostart.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
@@ -890,7 +896,7 @@ fn main() {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     #[allow(unused_mut)]
                     let mut initial = Saved::default();
-                    #[cfg(target_os = "windows")]
+                    #[cfg(not(target_os = "macos"))]
                     if let Some(proxy) = clash_verge::local_proxy() {
                         initial.settings.foreign_proxy = proxy.clone();
                         initial.settings.claude_proxy = proxy.clone();

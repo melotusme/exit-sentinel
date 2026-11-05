@@ -90,7 +90,7 @@ export function renderSettings(s: Settings) {
           </div>
         </div>
         <p class="muted">默认留空，各自域名沿现有 TUN 分流；不会继承“国外检测代理”。不修改代理客户端规则。</p>
-        <label class="field"><span>节点数据来源</span><select name="manual_nodes_only"><option value="false" ${!s.manual_nodes_only ? 'selected' : ''}>自动读取本机（macOS：Shadowrocket；Windows：Clash Verge）</option><option value="true" ${s.manual_nodes_only ? 'selected' : ''}>仅手动导入（Shadowrocket / Clash Verge / Karing / Clash Mi 等）</option></select><small>macOS 优先读取近期同域名实际连接日志；没有日志时仅提供配置候选，不能证明某个进程的路径。手动导入节点可在节点库登记，不自动关联 IP。</small></label>
+        <label class="field"><span>节点数据来源</span><select name="manual_nodes_only"><option value="false" ${!s.manual_nodes_only ? 'selected' : ''}>自动读取本机（macOS：Shadowrocket；Windows / Linux：Clash Verge）</option><option value="true" ${s.manual_nodes_only ? 'selected' : ''}>仅手动导入（Shadowrocket / Clash Verge / Karing / Clash Mi 等）</option></select><small>macOS 优先读取近期同域名实际连接日志；没有日志时仅提供配置候选，不能证明某个进程的路径。手动导入节点可在节点库登记，不自动关联 IP。</small></label>
         <div class="settings-grid">
           <label class="field">
             <span>Claude 检测代理</span>

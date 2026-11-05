@@ -26,7 +26,7 @@ async fn token() -> Result<String, String> {
         #[cfg(target_os = "windows")]
         let gh = gh_path.to_str().ok_or("GitHub CLI 路径编码无效")?;
         #[cfg(not(target_os = "windows"))]
-        let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+        let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh", "/home/linuxbrew/.linuxbrew/bin/gh"]
             .into_iter()
             .find(|p| std::path::Path::new(p).is_file())
             .ok_or("私有更新需要 GitHub CLI：请安装 gh 并执行 gh auth login。")?;

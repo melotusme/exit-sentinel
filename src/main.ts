@@ -138,7 +138,7 @@ document.querySelector('#app')!.innerHTML = `
     </nav>
     <div class="sidebar-foot">
       <small>关闭窗口后在菜单栏继续监控。</small>
-      <span class="version">macOS · Windows / <span id="app-version">读取版本…</span></span>
+      <span class="version">macOS · Windows · Linux / <span id="app-version">读取版本…</span></span>
     </div>
   </aside>
   <main id="main-content">

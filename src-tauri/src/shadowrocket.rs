@@ -138,7 +138,7 @@ pub async fn selected_capture(service: &str, proxy: &str, manual_only: bool) -> 
     capture(service, proxy).await
 }
 /// Read several services' snapshots in one Python process (one JSON line per service).
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 async fn read_snapshots(services: Vec<String>) -> Vec<Result<RouteSnapshot, String>> {
     let count = services.len();
     let result = tokio::task::spawn_blocking(move || {
@@ -177,18 +177,18 @@ fn finish(service: &str, proxy: &str, read: Result<RouteSnapshot, String>) -> Ro
     snapshot.last_seen = snapshot.first_seen.clone();
     snapshot
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
     let read = read_snapshots(vec![service.to_string()]).await.pop().unwrap_or_else(|| Err("Shadowrocket 读取任务失败".into()));
     finish(service, proxy, read)
 }
 /// Snapshots for several (service, proxy) pairs; on macOS one Python process for all.
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub async fn capture_many(targets: &[(&str, &str)]) -> Vec<RouteSnapshot> {
     let reads = read_snapshots(targets.iter().map(|(s, _)| s.to_string()).collect()).await;
     targets.iter().zip(reads).map(|((service, proxy), read)| finish(service, proxy, read)).collect()
 }
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub async fn capture_many(targets: &[(&str, &str)]) -> Vec<RouteSnapshot> {
     let mut out = vec![];
     for (service, proxy) in targets {
@@ -355,7 +355,7 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub async fn capture(service: &str, proxy: &str) -> RouteSnapshot {
     crate::clash_verge::capture(service, proxy).await
 }

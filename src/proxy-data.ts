@@ -41,7 +41,7 @@ export function proxyDataSettings(isPaused: boolean) {
         <label class="toggle"><span>导入后关闭自动节点读取<small>默认保留当前自动读取设置。勾选后只显示手动节点库，无法自动识别 Claude / Gemini 实际节点。</small></span><input id="import-manual-only" name="import-manual-only" type="checkbox" ${manualOnly ? 'checked' : ''}></label>
         <div class="form-actions"><button id="commit-proxy-import" type="button" class="primary">确认导入节点</button></div>
       </div>
-      <details class="import-help"><summary>读取范围与数据说明</summary><p class="small muted">读取软件已保存的全部节点。macOS 支持上面四款软件；Windows 当前支持读取 Clash Verge。其他情况可使用配置文件。</p><p class="small muted">新节点标为待确认，重复节点合并并保留原有标记。导入仅登记节点，不代表当前选中、出口 IP 或可用性。仅保存识别信息，不保存连接密码、订阅地址或控制器密钥。</p></details>
+      <details class="import-help"><summary>读取范围与数据说明</summary><p class="small muted">读取软件已保存的全部节点。macOS 支持上面四款软件；Windows 和 Linux 当前支持读取 Clash Verge。其他情况可使用配置文件。</p><p class="small muted">新节点标为待确认，重复节点合并并保留原有标记。导入仅登记节点，不代表当前选中、出口 IP 或可用性。仅保存识别信息，不保存连接密码、订阅地址或控制器密钥。</p></details>
     </section>
     <p id="proxy-data-result" class="operation-result ${errorMessage ? 'is-error' : ''}" role="status" aria-live="polite" ${resultMessage ? '' : 'hidden'}>${esc(resultMessage)}</p>
     <section class="panel settings settings-card danger-zone" aria-labelledby="clear-title">

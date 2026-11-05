@@ -1,7 +1,7 @@
 [package]
 name = "exit-sentinel"
 version = "0.4.0"
-description = "A private macOS and Windows split-route egress monitor"
+description = "A private macOS, Windows and Linux split-route egress monitor"
 edition = "2021"
 
 [build-dependencies]
@@ -27,6 +27,7 @@ serde_yaml = "0.9"
 aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
-arboard = { version = "3", default-features = false }
+# Linux stores the WebDAV password in the Secret Service (GNOME Keyring / KWallet).
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 flate2 = "1"

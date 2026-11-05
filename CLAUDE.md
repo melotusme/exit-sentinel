@@ -14,4 +14,5 @@
 2. `npm run build` 和 `npm test` 通过后提交到 `main` 并推送。
 3. 触发发布仓库的工作流：`gh workflow run "Publish signed release" -R melotusme/exit-sentinel-releases -f source_ref=main`。它在 macOS 和 Windows 上构建、测试、签名，全部成功才发布。
 4. 发布后更新私有 Homebrew tap（`melotusme/homebrew-exit-sentinel` 的 `scripts/update-cask.py`）。
-5. 本机部署：安装新版到 `~/Applications/Exit Sentinel.app`，替换前备份旧版应用和 `~/Library/Application Support/local.mhzrm.exit-sentinel/settings.json`。
+5. 本机部署（macOS）：安装新版到 `~/Applications/Exit Sentinel.app`，替换前备份旧版应用和 `~/Library/Application Support/local.mhzrm.exit-sentinel/settings.json`。
+6. Linux（Omarchy）部署：在目标机器运行 Release 中的 `install-linux.sh`（见 README），它会备份旧版应用和设置。

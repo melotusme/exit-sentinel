@@ -1,7 +1,7 @@
 import {readFileSync,writeFileSync,copyFileSync,mkdirSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 const platform=process.argv[2], target=process.argv[3];
-if(!['darwin-aarch64','windows-x86_64'].includes(platform))throw new Error('Unsupported platform');
+if(!['darwin-aarch64','windows-x86_64','linux-x86_64'].includes(platform))throw new Error('Unsupported platform');
 const config=JSON.parse(readFileSync('src-tauri/tauri.conf.json','utf8'));
 const bundle=path.join('src-tauri/target',target,'release/bundle');
 const out='release-assets';mkdirSync(out,{recursive:true});
@@ -12,6 +12,12 @@ if(platform==='darwin-aarch64'){
   const dmg=readdirSync(path.join(bundle,'dmg')).filter(n=>n.endsWith('.dmg'));
   if(dmg.length!==1)throw new Error('Expected one DMG');
   copyFileSync(path.join(bundle,'dmg',dmg[0]),path.join(out,dmg[0].replaceAll(' ', '.')));
+}else if(platform==='linux-x86_64'){
+  asset='Exit.Sentinel.linux.x86_64.AppImage';
+  const images=readdirSync(path.join(bundle,'appimage')).filter(n=>n.endsWith('.AppImage'));
+  if(images.length!==1)throw new Error('Expected one AppImage');
+  for(const suffix of ['', '.sig'])copyFileSync(path.join(bundle,'appimage',images[0]+suffix),path.join(out,asset+suffix));
+  copyFileSync('scripts/install-linux.sh',path.join(out,'install-linux.sh'));
 }else{
   asset='Exit.Sentinel.windows.x64.exe';
   const exes=readdirSync(path.join(bundle,'nsis')).filter(n=>n.endsWith('-setup.exe'));

@@ -233,7 +233,40 @@ mod sampler_tests {
         assert!(s.full_due("a", true));
     }
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn network_snapshot() -> String {
+    let ip = ["/usr/bin/ip", "/usr/sbin/ip", "/sbin/ip", "/bin/ip"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .unwrap_or("ip");
+    let route = output(ip, &["-4", "route", "show", "default"]);
+    let route6 = output(ip, &["-6", "route", "show", "default"]);
+    let addrs = output(ip, &["-brief", "address", "show", "up"]);
+    let proxy = env_proxy_summary(|k| std::env::var(k).ok());
+    format!("Linux 网络接口\n{addrs}\n\nIPv4 默认路由\n{route}\n\nIPv6 默认路由\n{route6}\n\n环境代理变量（仅展示，已去除账号密码）\n{proxy}")
+}
+/// Proxy environment variables with any user:password removed.
+#[cfg(any(test, not(any(target_os = "windows", target_os = "macos"))))]
+pub fn env_proxy_summary(get: impl Fn(&str) -> Option<String>) -> String {
+    let rows: Vec<String> = ["http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]
+        .into_iter()
+        .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (k, v)))
+        .map(|(k, v)| {
+            let shown = match url::Url::parse(&v) {
+                Ok(mut u) if !k.eq_ignore_ascii_case("no_proxy") => {
+                    let _ = u.set_username("");
+                    let _ = u.set_password(None);
+                    u.to_string()
+                }
+                _ if v.contains('@') => "（含账号信息，已隐藏）".into(),
+                _ => v,
+            };
+            format!("{k}={shown}")
+        })
+        .collect();
+    if rows.is_empty() { "未设置".into() } else { rows.join("\n") }
+}
+#[cfg(target_os = "macos")]
 pub fn network_snapshot() -> String {
     // scutil output has no timestamps; do not store DNS cache, cookies, or Wi-Fi credentials.
     let nwi = output("/usr/sbin/scutil", &["--nwi"]);
@@ -521,4 +554,20 @@ pub fn network_snapshot() -> String {
         ],
     );
     format!("Windows IPv4 路由\n{route}\nWindows IPv6 路由\n{route6}\n系统代理（仅展示，不执行 PAC）\n{proxy}")
+}
+
+#[cfg(test)]
+mod env_proxy_tests {
+    #[test]
+    fn hides_proxy_credentials() {
+        let out = super::env_proxy_summary(|k| match k {
+            "https_proxy" => Some("http://user:secret@127.0.0.1:7897".into()),
+            "no_proxy" => Some("localhost,127.0.0.1".into()),
+            _ => None,
+        });
+        assert!(out.contains("https_proxy=http://127.0.0.1:7897"));
+        assert!(out.contains("no_proxy=localhost,127.0.0.1"));
+        assert!(!out.contains("secret") && !out.contains("user"));
+        assert_eq!(super::env_proxy_summary(|_| None), "未设置");
+    }
 }

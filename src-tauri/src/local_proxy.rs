@@ -77,8 +77,14 @@ fn roots(client: &str) -> Result<Vec<PathBuf>, String> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (h, client);
-        Err("unsupported".into())
+        let data = crate::clash_verge::data_root().unwrap_or_else(|| h.join(".local/share"));
+        Ok(match client {
+            "clash_verge" => vec![
+                data.join("io.github.clash-verge-rev.clash-verge-rev"),
+                data.join("io.github.zzzgydi.clash-verge"),
+            ],
+            _ => return Err("unsupported".into()),
+        })
     }
 }
 fn profile_sources(root: &Path, client: &str) -> Result<(Vec<String>, usize), String> {

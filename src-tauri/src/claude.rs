@@ -45,7 +45,27 @@ pub fn is_claude_process(line: &str) -> bool {
     line.ends_with("/Claude.app/Contents/MacOS/Claude")
         || line.ends_with("/Claude-3p.app/Contents/MacOS/Claude")
 }
-#[cfg(not(target_os = "windows"))]
+/// Linux has no official Claude Desktop; community packages (e.g. claude-desktop-debian,
+/// claude-desktop-bin on the AUR) run Electron from a `claude-desktop` path. Claude Code (`claude`)
+/// is a CLI and does not count.
+#[cfg(any(test, not(any(target_os = "windows", target_os = "macos"))))]
+pub fn is_linux_claude_cmdline(cmdline: &[u8]) -> bool {
+    cmdline
+        .split(|b| *b == 0)
+        .take(2)
+        .map(String::from_utf8_lossy)
+        .any(|arg| arg.split('/').any(|part| part.eq_ignore_ascii_case("claude-desktop")))
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn running() -> Result<bool, String> {
+    let dir = std::fs::read_dir("/proc").map_err(|e| format!("读取 Claude 进程失败：{e}"))?;
+    Ok(dir.flatten().any(|entry| {
+        entry.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+            && std::fs::read(entry.path().join("cmdline"))
+                .is_ok_and(|c| is_linux_claude_cmdline(&c))
+    }))
+}
+#[cfg(target_os = "macos")]
 pub fn running() -> Result<bool, String> {
     let out = crate::command("/bin/ps")
         .args(["-axo", "comm="])
@@ -322,4 +342,18 @@ pub fn running() -> Result<bool, String> {
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
         .any(|l| l.to_ascii_lowercase().starts_with("\"claude.exe\",")))
+}
+
+#[cfg(test)]
+mod linux_process_tests {
+    use super::is_linux_claude_cmdline;
+    #[test]
+    fn matches_community_claude_desktop_but_not_claude_code() {
+        assert!(is_linux_claude_cmdline(b"/usr/lib/claude-desktop/electron\0/usr/lib/claude-desktop/app.asar\0"));
+        assert!(is_linux_claude_cmdline(b"/usr/bin/claude-desktop\0--type=renderer\0"));
+        assert!(is_linux_claude_cmdline(b"electron\0/usr/lib/claude-desktop\0"));
+        assert!(!is_linux_claude_cmdline(b"/home/u/.local/bin/claude\0--resume\0"));
+        assert!(!is_linux_claude_cmdline(b"node\0/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js\0"));
+        assert!(!is_linux_claude_cmdline(b"vim\0notes\0/tmp/claude-desktop\0"));
+    }
 }

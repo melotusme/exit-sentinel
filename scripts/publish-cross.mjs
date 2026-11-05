@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 const repo='melotusme/exit-sentinel-releases',dir='release-assets';
 const {version}=JSON.parse(readFileSync('src-tauri/tauri.conf.json','utf8'));
 const tag=`v${version}`,notes=readFileSync('release-notes.md','utf8'),platforms={};
-for(const key of ['darwin-aarch64','windows-x86_64']){
+for(const key of ['darwin-aarch64','windows-x86_64','linux-x86_64']){
  const meta=JSON.parse(readFileSync(`${dir}/${key}.json`,'utf8'));
  if(meta.version!==version||meta.platform!==key||!meta.signature||!existsSync(`${dir}/${meta.asset}`))throw new Error('Missing or mismatched build artifacts');
  platforms[key]={signature:meta.signature,url:`https://github.com/${repo}/releases/download/${tag}/${meta.asset}`};

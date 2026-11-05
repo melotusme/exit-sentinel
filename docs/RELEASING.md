@@ -42,3 +42,11 @@ Windows 使用 Tauri 自动合并的 `tauri.windows.conf.json`，生成当前用
 `prepare-release.mjs` 为每个平台规范化资产名称，`publish-cross.mjs` 在草稿中组装包含两个平台的 `latest.json` 和 `SHA256SUMS`。本机旧 `publish.mjs` 仅供历史 macOS 发布，不用于 0.3.0 及以后。
 
 Homebrew tap 为私有 `melotusme/homebrew-exit-sentinel`，cask 固定版本和 SHA-256，通过本机 `gh release download` 下载。发布后运行 tap 的 `scripts/update-cask.py` 更新并提交；不存储 GitHub token。当前 cask 只提供 Apple Silicon macOS。
+
+## 0.5.0 Linux
+
+发布矩阵增加 `ubuntu-22.04` 上的 x86_64 Linux 构建，产出 Tauri 签名的 AppImage（`Exit.Sentinel.linux.x86_64.AppImage`，清单键 `linux-x86_64`），三个平台全部成功才发布。在 Ubuntu 22.04 上构建，以兼容较旧 glibc；Arch / Omarchy 等较新的发行版可直接运行。
+
+`install-linux.sh` 随 Release 一起上传并列入 `SHA256SUMS`。它通过本机 `gh` 下载 AppImage，校验 SHA-256，备份旧版和 `settings.json` 到 `~/.local/share/exit-sentinel/backups/`，安装到 `~/.local/bin/exit-sentinel.AppImage`，并写入 `~/.local/share/applications/exit-sentinel.desktop`。之后的升级可在应用内完成（Tauri updater 只支持 AppImage 形式在 Linux 上自更新）。
+
+AppImage 需要 libfuse2（Arch：`fuse2`）。未做 Linux 包管理器（AUR / pacman）登记；Linux ARM64 尚无包。

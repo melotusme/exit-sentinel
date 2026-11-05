@@ -43,7 +43,7 @@ export function syncSettings() {
       <label class="field field-full">
         <span>应用密码</span>
         <input id="dav-secret" name="webdav-secret" type="password" autocomplete="new-password" placeholder="${config?.has_password ? '已保存在系统凭据库；留空保留现有密码' : '坚果云安全选项 → 第三方应用管理 → 应用密码'}">
-        <small>请使用第三方应用密码。密码仅保存在本机 macOS 钥匙串／Windows 凭据管理器，不同步。</small>
+        <small>请使用第三方应用密码。密码仅保存在本机 macOS 钥匙串／Windows 凭据管理器／Linux 密钥环（GNOME Keyring 等），不同步。</small>
       </label>
     </div>
     <div class="form-actions">
