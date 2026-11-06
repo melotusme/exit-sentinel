@@ -7,6 +7,7 @@ mod ai;
 mod exit_worker;
 mod google;
 mod intelligence;
+mod legacy_data;
 mod local_proxy;
 mod model;
 mod net;
@@ -876,6 +877,8 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
+    // Must run before any window exists: WebView storage lives under the identifier too.
+    let migration_errors = legacy_data::migrate();
     let autostart = tauri_plugin_autostart::Builder::new();
     #[cfg(target_os = "macos")]
     let autostart = autostart.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
@@ -889,7 +892,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(autostart.arg("--autostart").build())
-        .setup(|app| {
+        .setup(move |app| {
             let path = app.path().app_data_dir()?;
             let (mut saved, load_error) = match std::fs::read(path.join("settings.json")) {
                 Ok(b) => match serde_json::from_slice::<Saved>(&b) {
@@ -948,7 +951,9 @@ fn main() {
                         status: "starting".into(),
                         last_check: String::new(),
                         notification_error: None,
-                        storage_error: load_error,
+                        storage_error: load_error.or_else(|| {
+                            (!migration_errors.is_empty()).then(|| migration_errors.join("；"))
+                        }),
                     },
                     generation: 0,
                     network_tracker: Tracker::default(),

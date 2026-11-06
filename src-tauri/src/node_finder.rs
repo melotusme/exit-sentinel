@@ -228,7 +228,7 @@ mod live_tests {
     #[test]
     #[ignore = "opt-in: ranks this machine's saved nodes"]
     fn rank_local_nodes() {
-        let path = std::env::var("HOME").unwrap() + "/Library/Application Support/local.mhzrm.exit-sentinel/settings.json";
+        let path = std::env::var("HOME").unwrap() + "/Library/Application Support/dev.exit-sentinel.desktop/settings.json";
         let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         let nodes: Vec<crate::shadowrocket::NodeRecord> = serde_json::from_value(saved["ai_nodes"].clone()).unwrap();
         let mut seen = std::collections::HashSet::new();
