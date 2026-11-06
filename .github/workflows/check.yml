@@ -9,7 +9,7 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-22.04]
+        os: [windows-latest, ubuntu-22.04]  # macOS 只在本机构建（Actions 额度），见 CLAUDE.md
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

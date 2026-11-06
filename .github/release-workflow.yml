@@ -6,8 +6,6 @@ on:
         description: Private source branch or tag
         default: main
         required: true
-  schedule:
-    - cron: '17 * * * *'
 permissions:
   contents: write
 concurrency:
