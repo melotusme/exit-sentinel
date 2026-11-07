@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Private source branch or tag
+        description: Source branch or tag
         default: main
         required: true
 permissions:

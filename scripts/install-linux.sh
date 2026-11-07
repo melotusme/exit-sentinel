@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install or upgrade Exit Sentinel on Linux (tested target: Omarchy / Arch, x86_64).
 # Usage: install-linux.sh [vX.Y.Z]   (default: latest release)
-# Needs: gh logged in with read access to the private release repo, sha256sum, libfuse2.
+# Needs: curl, sha256sum, libfuse2. Downloads from the public release repository.
 set -euo pipefail
 
 REPO='melotusme/exit-sentinel-releases'
@@ -23,23 +23,24 @@ fail() { echo "安装失败：$*" >&2; exit 1; }
 
 [ "$(uname -s)" = Linux ] || fail '此脚本仅用于 Linux'
 [ "$(uname -m)" = x86_64 ] || fail "当前只提供 x86_64 包，本机为 $(uname -m)"
-command -v gh >/dev/null || fail '需要 GitHub CLI：sudo pacman -S github-cli，然后 gh auth login'
+command -v curl >/dev/null || fail '缺少 curl：sudo pacman -S curl'
 command -v sha256sum >/dev/null || fail '缺少 sha256sum（coreutils）'
-gh auth status --hostname github.com >/dev/null 2>&1 || fail 'GitHub 尚未登录，请执行 gh auth login'
 if ! { ldconfig -p 2>/dev/null | grep -q 'libfuse.so.2'; } && [ ! -e /usr/lib/libfuse.so.2 ]; then
   fail 'AppImage 需要 libfuse2：sudo pacman -S --needed fuse2'
 fi
 
 TAG="${1:-}"
 if [ -z "$TAG" ]; then
-  TAG=$(gh release view --repo "$REPO" --json tagName --jq .tagName) || fail '无法读取最新版本，请确认账号可读取发布仓库'
+  LATEST=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") || fail '无法读取最新版本，请检查网络'
+  TAG="${LATEST##*/}"
 fi
 case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) fail "版本号格式无效：$TAG" ;; esac
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 echo "下载 Exit Sentinel $TAG …"
-gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" --pattern SHA256SUMS --dir "$WORK" \
+BASE="https://github.com/$REPO/releases/download/$TAG"
+{ curl -fsSL -o "$WORK/$ASSET" "$BASE/$ASSET" && curl -fsSL -o "$WORK/SHA256SUMS" "$BASE/SHA256SUMS"; } \
   || fail "下载失败；确认 $TAG 包含 Linux 包"
 LINE=$(grep -E "^[0-9a-f]{64}  \*?${ASSET//./\\.}\$" "$WORK/SHA256SUMS" || true)
 [ "$(printf '%s\n' "$LINE" | grep -c .)" = 1 ] || fail '缺少唯一的安装包校验记录'

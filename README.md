@@ -12,7 +12,7 @@ macOS 菜单栏 / Windows 与 Linux 托盘应用，基于 Tauri 2。分别观测
 - 网站 curl 诊断：状态码、阶段耗时、原始请求与响应，支持复制。
 - 列表支持筛选、排序、分页和独立偏好记忆。
 - 菜单栏 / 设置页开机自启开关；关闭窗口后后台运行。
-- GitHub 私有仓库自动检查更新，下载验证签名后安装并重启；可关闭自动检查。
+- 从公开的 GitHub Release 自动检查更新，无需登录；下载后验证签名再安装并重启，可关闭自动检查。
 
 ## 安装
 
@@ -22,17 +22,16 @@ macOS 菜单栏 / Windows 与 Linux 托盘应用，基于 Tauri 2。分别观测
 
 ### Linux x86_64（Omarchy / Arch）
 
-以 AppImage 发布，可在应用内升级。先安装依赖并登录 GitHub：
+以 AppImage 发布，可在应用内升级。先安装依赖：
 
 ```sh
-sudo pacman -S --needed github-cli fuse2
-gh auth login
+sudo pacman -S --needed curl fuse2
 ```
 
 安装或升级（脚本校验 SHA-256，备份旧版应用和设置，装到 `~/.local/bin/exit-sentinel.AppImage` 并注册启动器图标）：
 
 ```sh
-gh release download --repo melotusme/exit-sentinel-releases --pattern install-linux.sh --dir /tmp/es-install --clobber && bash /tmp/es-install/install-linux.sh
+curl -fsSL https://github.com/melotusme/exit-sentinel-releases/releases/latest/download/install-linux.sh -o /tmp/es-install-linux.sh && bash /tmp/es-install-linux.sh
 ```
 
 Linux 读取 Clash Verge Rev 的 `~/.local/share/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml`，支持 HTTP 控制器与 Mihomo 本机 Unix socket。托盘依赖 StatusNotifier（Omarchy 的 Waybar 托盘已支持）；WebDAV 密码保存在 Secret Service（GNOME Keyring 等）。Claude 桌面版仅识别社区 `claude-desktop` 包。默认设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，避免 Wayland / NVIDIA 下窗口空白。
@@ -40,15 +39,11 @@ Linux 读取 Clash Verge Rev 的 `~/.local/share/io.github.clash-verge-rev.clash
 ### Homebrew（Apple Silicon macOS）
 
 ```sh
-brew install gh
-gh auth login
-gh auth setup-git
-brew tap melotusme/exit-sentinel https://github.com/melotusme/homebrew-exit-sentinel.git
-brew trust --cask melotusme/exit-sentinel/exit-sentinel
+brew tap melotusme/exit-sentinel
 brew install --cask melotusme/exit-sentinel/exit-sentinel
 ```
 
-GitHub 账号须可读两个私有仓库：发布仓库和 tap（源码仓库是公开的）。tap 通过本机 `gh` 下载，SHA-256 校验后安装，不把访问令牌写入 cask。升级使用 `brew update` 和 `brew upgrade --cask melotusme/exit-sentinel/exit-sentinel`，或应用内检查更新。
+源码、发布仓库和 tap 都是公开的，不需要 GitHub 登录。cask 固定版本并校验 SHA-256。升级使用 `brew update` 和 `brew upgrade --cask melotusme/exit-sentinel/exit-sentinel`，或应用内检查更新。
 
 ## WebDAV / 坚果云
 
@@ -73,11 +68,11 @@ npm test
 npm run tauri -- dev
 ```
 
-本机构建脚本绕过失效的全局 Cargo 镜像配置，不修改全局设置。源码仓库公开，发布仓库私有；客户端需要先安装 GitHub CLI 并执行 `gh auth login`，账号须有仓库读取权限。正式更新包需要本机外置签名私钥或 CI Secret：参见 [发布说明](docs/RELEASING.md)。
+本机构建脚本绕过失效的全局 Cargo 镜像配置，不修改全局设置。正式更新包需要本机外置签名私钥或 CI Secret：参见 [发布说明](docs/RELEASING.md)。
 
 ## 隐私
 
-无遥测，不读取 Claude 登录凭据，不修改代理规则。出口检测服务能看到请求来源 IP；无缓存时向 ipwho.is 查询出口地理信息；查看附近公开地点时向 Nominatim 发送粗略坐标。更新检查通过本机 gh 登录访问私有 GitHub API，不发送本地监控记录；凭据仅在 Rust 后端使用，不进入前端、配置或应用包。
+无遥测，不读取 Claude 登录凭据，不修改代理规则。出口检测服务能看到请求来源 IP；无缓存时向 ipwho.is 查询出口地理信息；查看附近公开地点时向 Nominatim 发送粗略坐标。更新检查匿名访问公开的 GitHub Release，不发送本地监控记录，也不使用任何 GitHub 凭据。
 
 Windows 配置位于 `%APPDATA%/dev.exit-sentinel.desktop/`，Linux 位于 `~/.local/share/dev.exit-sentinel.desktop/`。macOS 设置、IP 和节点记录保存在 `~/Library/Application Support/dev.exit-sentinel.desktop/settings.json`，Unix 权限 0600。0.5.1 之后的版本换了应用标识：首次启动会把旧标识 `local.<名字>.exit-sentinel` 下的设置和界面偏好复制过来，旧目录原样保留，确认无误后可以手动删除。该目录不打包、不提交。Shadowrocket 读取只保留节点身份和路由元数据，不导出密码、密钥或订阅链接。
 

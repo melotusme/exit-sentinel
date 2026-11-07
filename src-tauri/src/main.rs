@@ -12,13 +12,13 @@ mod local_proxy;
 mod model;
 mod net;
 mod node_finder;
-mod private_updates;
 mod proxy_import;
 mod region;
 mod shadowrocket;
 mod sync;
 mod tray;
 mod tray_menu;
+mod updates;
 mod verdict;
 use ai::compute_verdicts;
 use model::{Event, Probe, Settings, Tracker};
@@ -912,7 +912,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     let autostart = autostart.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
     tauri::Builder::default()
-        .manage(private_updates::State::default())
+        .manage(updates::State::default())
         .manage(sync::State::default())
         .manage(proxy_import::State::default())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
@@ -1024,8 +1024,8 @@ fn main() {
             sync::save_sync_config,
             sync::import_verge_webdav,
             sync::sync_action,
-            private_updates::check_private_update,
-            private_updates::install_private_update,
+            updates::check_update,
+            updates::install_update,
             get_state,
             ai::save_claude_ip,
             ai::save_ai_node,

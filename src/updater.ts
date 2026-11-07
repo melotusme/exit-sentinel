@@ -29,7 +29,7 @@ export function updateSettings() {
       <button type="button" id="check-software-update" ${busy ? 'disabled' : ''}>检查更新</button>
     </div>
     <label class="toggle">
-      <span>自动检查 GitHub 私有新版本<small>使用本机 gh 登录的仓库权限；启动后及每 6 小时检查。发现新版后由你确认安装，不上传本机出口与节点记录。</small></span>
+      <span>自动检查新版本<small>从公开的 GitHub Release 读取，无需登录；启动后及每 6 小时检查。发现新版后由你确认安装，不上传本机出口与节点记录。</small></span>
       <input name="auto_update" type="checkbox" ${enabled ? 'checked' : ''}>
     </label>`;
 }
@@ -64,10 +64,10 @@ async function checkUpdate(manual: boolean) {
   }
   busy = true;
   notes = '';
-  if (manual) message = '正在检查 GitHub 私有更新…';
+  if (manual) message = '正在检查 GitHub 更新…';
   paint();
   try {
-    pending = await invoke<Update | null>('check_private_update');
+    pending = await invoke<Update | null>('check_update');
     if (pending) {
       message = `发现新版本 v${pending.version}（当前 v${pending.current_version}）`;
       notes = pending.body || '此版本未提供更新说明。';
@@ -75,7 +75,7 @@ async function checkUpdate(manual: boolean) {
   } catch (e) {
     if (manual) {
       message = `检查更新失败：${String(e)}`;
-      notes = '使用本机 GitHub CLI 登录。请确认 gh auth status 正常且账号有仓库读取权限。';
+      notes = '更新从公开的 GitHub Release 下载，请检查网络或稍后重试。';
     }
   } finally {
     busy = false;
@@ -92,7 +92,7 @@ async function install() {
   paint();
   let installed = false;
   try {
-    await invoke('install_private_update');
+    await invoke('install_update');
     installed = true;
     message = '更新已安装，正在重新启动…';
     paint();
@@ -110,13 +110,13 @@ async function install() {
 }
 
 export async function initUpdates() {
-  await listen<{ received: number; total: number | null }>('private-update-progress', e => {
+  await listen<{ received: number; total: number | null }>('update-progress', e => {
     message = e.payload.total
-      ? `正在下载私有更新 ${Math.min(100, Math.round((e.payload.received / e.payload.total) * 100))}%`
-      : `正在下载私有更新 ${(e.payload.received / 1048576).toFixed(1)} MiB`;
+      ? `正在下载更新 ${Math.min(100, Math.round((e.payload.received / e.payload.total) * 100))}%`
+      : `正在下载更新 ${(e.payload.received / 1048576).toFixed(1)} MiB`;
     paint();
   });
-  await listen('private-update-installing', () => {
+  await listen('update-installing', () => {
     message = '下载完成，正在验证签名并安装…';
     paint();
   });
