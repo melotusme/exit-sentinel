@@ -26,3 +26,8 @@ docs/*
 *.log
 artifacts/
 __pycache__/
+
+# Local agent tooling and generated promo media (may contain screenshots); never publish
+.agents/
+brag-output/
+skills-lock.json
