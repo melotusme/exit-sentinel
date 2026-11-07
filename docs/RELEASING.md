@@ -1,6 +1,6 @@
 # 私有 GitHub 自更新
 
-源码仓库 `melotusme/exit-sentinel` 公开，发布仓库 `melotusme/exit-sentinel-releases` 私有。发布仓库的工作流用只读 Deploy Key（Secret `SOURCE_DEPLOY_KEY`）拉取源码，私钥另存在本机 `~/hzr/secrets/`。
+源码仓库 `melotusme/exit-sentinel` 和发布仓库 `melotusme/exit-sentinel-releases` 都公开（2026-11-07 起；0.6.0 之前的 Release 已删除）。发布仓库的工作流用只读 Deploy Key（Secret `SOURCE_DEPLOY_KEY`）拉取源码，私钥另存在本机 `~/hzr/secrets/`。
 
 ## 客户端认证
 
