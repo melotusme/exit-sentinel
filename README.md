@@ -48,7 +48,7 @@ brew trust --cask melotusme/exit-sentinel/exit-sentinel
 brew install --cask melotusme/exit-sentinel/exit-sentinel
 ```
 
-GitHub 账号须可读三个私有仓库：源码、发布仓库和 tap。tap 通过本机 `gh` 下载，SHA-256 校验后安装，不把访问令牌写入 cask。升级使用 `brew update` 和 `brew upgrade --cask melotusme/exit-sentinel/exit-sentinel`，或应用内检查更新。
+GitHub 账号须可读两个私有仓库：发布仓库和 tap（源码仓库是公开的）。tap 通过本机 `gh` 下载，SHA-256 校验后安装，不把访问令牌写入 cask。升级使用 `brew update` 和 `brew upgrade --cask melotusme/exit-sentinel/exit-sentinel`，或应用内检查更新。
 
 ## WebDAV / 坚果云
 
@@ -73,7 +73,7 @@ npm test
 npm run tauri -- dev
 ```
 
-本机构建脚本绕过失效的全局 Cargo 镜像配置，不修改全局设置。源码和发布仓库均为私有；客户端需要先安装 GitHub CLI 并执行 `gh auth login`，账号须有仓库读取权限。正式更新包需要本机外置签名私钥或 CI Secret：参见 [发布说明](docs/RELEASING.md)。
+本机构建脚本绕过失效的全局 Cargo 镜像配置，不修改全局设置。源码仓库公开，发布仓库私有；客户端需要先安装 GitHub CLI 并执行 `gh auth login`，账号须有仓库读取权限。正式更新包需要本机外置签名私钥或 CI Secret：参见 [发布说明](docs/RELEASING.md)。
 
 ## 隐私
 

@@ -1,6 +1,6 @@
 # 私有 GitHub 自更新
 
-源码仓库 `melotusme/exit-sentinel` 和发布仓库 `melotusme/exit-sentinel-releases` 均为私有。
+源码仓库 `melotusme/exit-sentinel` 公开，发布仓库 `melotusme/exit-sentinel-releases` 私有。发布仓库的工作流用只读 Deploy Key（Secret `SOURCE_DEPLOY_KEY`）拉取源码，私钥另存在本机 `~/hzr/secrets/`。
 
 ## 客户端认证
 
@@ -24,7 +24,7 @@ node scripts/publish.mjs release-notes.md
 
 脚本先创建私有仓库中的草稿，上传签名包、清单及 DMG，然后发布正式版本。失败的草稿可重试；已正式发布的版本不覆盖。`--prepare-only` 仅准备本地清单。
 
-GitHub Actions → Publish signed release → Run workflow 可指定私有源码分支 / 标签。没有定时任务，只能手动触发。源码 Deploy Key 为只读，签名密钥为 Secret；不运行外部 PR 代码。
+GitHub Actions → Publish signed release → Run workflow 可指定源码分支 / 标签。没有定时任务，只能手动触发。源码 Deploy Key 为只读，签名密钥为 Secret；不运行外部 PR 代码。
 
 ## 首次迁移与限制
 

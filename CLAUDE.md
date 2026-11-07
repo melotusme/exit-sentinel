@@ -14,7 +14,8 @@
 - **不要定时任务**：不要添加 `schedule` / cron 触发的工作流，发布只能手动触发。
 - 新增或修改工作流前，先确认不会加回 macOS runner 或定时触发；拿不准就先问用户。
 - 公开仓库的 Actions 免费，不受以上额度限制。
-- 本项目现状：发布仓库 `melotusme/exit-sentinel-releases` 的 `release.yml` 仍在 CI 上构建 macOS，还没改成本机构建。改好之前要发新版，先问用户。
+- 本项目现状：源码仓库 `melotusme/exit-sentinel` 已公开（2026-11-07 重建），`check.yml` 免费。私有发布仓库 `melotusme/exit-sentinel-releases` 的 `release.yml` 仍在 CI 上构建 macOS，还没改成本机构建。改好之前要发新版，先问用户。
+- 源码仓库是公开的：不要把真名、个人邮箱、本机绝对路径、机器名、真实 IP 或节点订阅写进代码、文档、测试或提交说明。用户的公开 ID 是 `mhzrm`。
 
 ## 发布与部署
 
