@@ -11,6 +11,7 @@ export interface Settings {
   ipv6_required: boolean;
   domestic_proxy: string;
   foreign_proxy: string;
+  ignored_checks: string[];
 }
 export interface Probe {
   id: string;
@@ -105,6 +106,7 @@ export interface View {
   checking: boolean;
   unacknowledged: boolean;
   status: string;
+  issues: string[];
   last_check: string;
   notification_error: string | null;
   storage_error: string | null;

@@ -7,13 +7,16 @@ set -euo pipefail
 REPO='melotusme/exit-sentinel-releases'
 ASSET='Exit.Sentinel.linux.x86_64.AppImage'
 APP_ID='dev.exit-sentinel.desktop'
-LEGACY_APP_ID='local.mhzrm.exit-sentinel'
 BIN_DIR="$HOME/.local/bin"
 TARGET="$BIN_DIR/exit-sentinel.AppImage"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 SETTINGS="$DATA_HOME/$APP_ID/settings.json"
 # Up to 0.5.1 the app used the legacy ID; the app copies that folder on first start.
-[ -f "$SETTINGS" ] || SETTINGS="$DATA_HOME/$LEGACY_APP_ID/settings.json"
+if [ ! -f "$SETTINGS" ]; then
+  for legacy in "$DATA_HOME"/local.*.exit-sentinel/settings.json; do
+    if [ -f "$legacy" ]; then SETTINGS="$legacy"; fi
+  done
+fi
 BACKUPS="$DATA_HOME/exit-sentinel/backups"
 
 fail() { echo "安装失败：$*" >&2; exit 1; }

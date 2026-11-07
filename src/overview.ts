@@ -177,6 +177,7 @@ export function renderOverview(v: View): string {
       <span class="status-symbol">${icon('pulse')}</span>
       <div class="status-text">
         <div class="status-headline"><strong>${titles[v.status] || v.status}</strong>${googleHealth(v)}</div>
+        ${v.issues?.length ? `<small class="status-issues">异常项：${v.issues.map(esc).join('；')}。可在设置中忽略。</small>` : ''}
         <small>上次检测：${time(v.last_check)} · 每 ${v.settings.interval} 秒</small>
       </div>
       <div class="status-actions">

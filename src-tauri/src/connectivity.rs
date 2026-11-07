@@ -164,7 +164,58 @@ fn classify(code: Option<u16>) -> Status {
         None => Status::Unreachable,
     }
 }
-async fn check(id: &str, name: &str, url: &str, proxy: &str) -> Reading {
+/// Regions where Claude is not offered. Reaching claude.ai from them still fails in practice.
+const CLAUDE_UNSUPPORTED: &[&str] = &["CN", "HK", "MO", "RU", "BY", "IR", "KP", "SY", "CU"];
+
+/// How a site check reads a response beyond its HTTP code.
+#[derive(Clone, Copy)]
+enum Kind {
+    Page,
+    /// Cloudflare `/cdn-cgi/trace`: always plain text, never a bot challenge, and carries `loc=`.
+    ClaudeTrace,
+}
+
+/// Cloudflare answers scripted requests to some pages with a 403 challenge. The site is reachable.
+fn is_challenge(code: u16, headers: &reqwest::header::HeaderMap) -> bool {
+    code == 403
+        && headers
+            .get("cf-mitigated")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("challenge"))
+}
+
+fn trace_loc(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|l| l.strip_prefix("loc="))
+        .map(|v| v.trim().to_ascii_uppercase())
+        .filter(|v| !v.is_empty())
+}
+
+/// Status and detail for a Claude trace reply.
+fn claude_trace(code: u16, body: &str) -> (Status, String) {
+    if !(200..=399).contains(&code) {
+        return (classify(Some(code)), format!("HTTP {code}：trace 返回异常状态"));
+    }
+    match trace_loc(body) {
+        Some(loc) if CLAUDE_UNSUPPORTED.contains(&loc.as_str()) => (
+            Status::Restricted,
+            format!("网络可达，但 Cloudflare 判定出口地区为 {loc}，不在 Claude 支持范围"),
+        ),
+        Some(loc) => (Status::Reachable, format!("HTTP {code} · 出口地区 {loc}")),
+        None => (Status::Reachable, format!("HTTP {code}")),
+    }
+}
+
+fn page_detail(code: u16) -> String {
+    match code {
+        200..=399 => format!("HTTP {code}"),
+        403 => "HTTP 403：验证页或访问受限；不代表账号不可用".into(),
+        429 => "HTTP 429：请求受到限流".into(),
+        _ => format!("HTTP {code}：服务返回异常状态"),
+    }
+}
+
+async fn check(id: &str, name: &str, url: &str, proxy: &str, kind: Kind) -> Reading {
     let start = Instant::now();
     let response = match crate::net::connectivity_client(proxy) {
         Ok(client) => client.get(url).send().await.map_err(|e| {
@@ -176,27 +227,34 @@ async fn check(id: &str, name: &str, url: &str, proxy: &str) -> Reading {
         }),
         Err(e) => Err(e),
     };
-    let (http_code, detail) = match response {
+    let (http_code, status, detail) = match response {
         Ok(r) => {
             let code = r.status().as_u16();
-            (
-                Some(code),
-                match code {
-                    200..=399 => format!("HTTP {code}"),
-                    403 => "HTTP 403：验证页或访问受限；不代表账号不可用".into(),
-                    429 => "HTTP 429：请求受到限流".into(),
-                    _ => format!("HTTP {code}：服务返回异常状态"),
-                },
-            )
+            if is_challenge(code, r.headers()) {
+                (
+                    Some(code),
+                    Status::Reachable,
+                    "HTTP 403：Cloudflare 人机验证页（程序请求常见），网络可达".to_string(),
+                )
+            } else {
+                match kind {
+                    Kind::Page => (Some(code), classify(Some(code)), page_detail(code)),
+                    Kind::ClaudeTrace => {
+                        let body = r.text().await.unwrap_or_default();
+                        let (status, detail) = claude_trace(code, &body);
+                        (Some(code), status, detail)
+                    }
+                }
+            }
         }
-        Err(e) => (None, e),
+        Err(e) => (None, Status::Unreachable, e),
     };
     Reading {
         id: id.into(),
         name: name.into(),
         url: url.into(),
         checked: crate::now(),
-        status: classify(http_code),
+        status,
         confirmed: None,
         stable: false,
         http_code,
@@ -211,19 +269,22 @@ pub async fn check_all(settings: &crate::model::Settings) -> Vec<Reading> {
             "google",
             "Google",
             "https://www.google.com/",
-            &settings.gemini_proxy
+            &settings.gemini_proxy,
+            Kind::Page
         ),
         check(
             "claude",
             "Claude",
-            "https://claude.ai/",
-            &settings.claude_proxy
+            "https://claude.ai/cdn-cgi/trace",
+            &settings.claude_proxy,
+            Kind::ClaudeTrace
         ),
         check(
             "gemini",
             "Gemini",
             "https://gemini.google.com/",
-            &settings.gemini_proxy
+            &settings.gemini_proxy,
+            Kind::Page
         ),
     );
     vec![google, claude, gemini]
@@ -283,6 +344,22 @@ mod tests {
             healthy
         );
         println!("isolated fault: 3 one-shot alerts; recovery: {healthy} website recovery alerts; user settings untouched");
+    }
+    #[test]
+    fn claude_trace_checks_region_and_cloudflare_challenge_is_reachable() {
+        let (st, d) = claude_trace(200, "fl=1\nip=1.2.3.4\nloc=US\nwarp=off\n");
+        assert_eq!(st, Status::Reachable);
+        assert!(d.contains("US"));
+        let (st, d) = claude_trace(200, "ip=1.2.3.4\nloc=hk\n");
+        assert_eq!(st, Status::Restricted);
+        assert!(d.contains("HK"));
+        assert_eq!(claude_trace(200, "").0, Status::Reachable);
+        assert_eq!(claude_trace(429, "loc=US").0, Status::Restricted);
+        let mut h = reqwest::header::HeaderMap::new();
+        assert!(!is_challenge(403, &h));
+        h.insert("cf-mitigated", "challenge".parse().unwrap());
+        assert!(is_challenge(403, &h));
+        assert!(!is_challenge(200, &h));
     }
     #[test]
     fn startup_failure_alerts_once_then_recovers_and_can_fail_again() {

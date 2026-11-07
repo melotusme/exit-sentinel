@@ -15,7 +15,21 @@ pub struct Settings {
     pub ipv6_required: bool,
     pub domestic_proxy: String,
     pub foreign_proxy: String,
+    /// Checks the user chose to ignore: they still run and show, but never mark the status abnormal.
+    pub ignored_checks: Vec<String>,
 }
+/// Checks that can be ignored, as (id, label). Sites are `site:<id>`, exit probes `probe:<id>`.
+pub const IGNORABLE_CHECKS: &[(&str, &str)] = &[
+    ("site:google", "Google 网站访问"),
+    ("site:claude", "Claude 网站访问"),
+    ("site:gemini", "Gemini 网站访问"),
+    ("probe:cn-ipip", "国内 · IPIP"),
+    ("probe:cn-3322", "国内 · 3322"),
+    ("probe:global-cf", "国外 · Cloudflare"),
+    ("probe:global-ipify", "国外 · ipify"),
+    ("probe:cn-v6", "国内 · IPv6"),
+    ("probe:global-v6", "国外 · IPv6"),
+];
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -30,11 +44,22 @@ impl Default for Settings {
             ipv6_required: false,
             domestic_proxy: String::new(),
             foreign_proxy: String::new(),
+            ignored_checks: Vec::new(),
         }
     }
 }
 impl Settings {
+    pub fn ignores(&self, id: &str) -> bool {
+        self.ignored_checks.iter().any(|x| x == id)
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(bad) = self
+            .ignored_checks
+            .iter()
+            .find(|x| !IGNORABLE_CHECKS.iter().any(|(id, _)| id == x))
+        {
+            return Err(format!("未知的忽略检测项：{bad}"));
+        }
         if !self.gemini_ip_url.is_empty() {
             let u = url::Url::parse(&self.gemini_ip_url).map_err(|_| "Gemini 出口检测 URL 无效")?;
             if u.scheme() != "https"

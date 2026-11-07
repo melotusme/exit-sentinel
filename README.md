@@ -79,7 +79,7 @@ npm run tauri -- dev
 
 无遥测，不读取 Claude 登录凭据，不修改代理规则。出口检测服务能看到请求来源 IP；无缓存时向 ipwho.is 查询出口地理信息；查看附近公开地点时向 Nominatim 发送粗略坐标。更新检查通过本机 gh 登录访问私有 GitHub API，不发送本地监控记录；凭据仅在 Rust 后端使用，不进入前端、配置或应用包。
 
-Windows 配置位于 `%APPDATA%/dev.exit-sentinel.desktop/`，Linux 位于 `~/.local/share/dev.exit-sentinel.desktop/`。macOS 设置、IP 和节点记录保存在 `~/Library/Application Support/dev.exit-sentinel.desktop/settings.json`，Unix 权限 0600。0.5.1 之后的版本换了应用标识：首次启动会把旧标识 `local.mhzrm.exit-sentinel` 下的设置和界面偏好复制过来，旧目录原样保留，确认无误后可以手动删除。该目录不打包、不提交。Shadowrocket 读取只保留节点身份和路由元数据，不导出密码、密钥或订阅链接。
+Windows 配置位于 `%APPDATA%/dev.exit-sentinel.desktop/`，Linux 位于 `~/.local/share/dev.exit-sentinel.desktop/`。macOS 设置、IP 和节点记录保存在 `~/Library/Application Support/dev.exit-sentinel.desktop/settings.json`，Unix 权限 0600。0.5.1 之后的版本换了应用标识：首次启动会把旧标识 `local.<名字>.exit-sentinel` 下的设置和界面偏好复制过来，旧目录原样保留，确认无误后可以手动删除。该目录不打包、不提交。Shadowrocket 读取只保留节点身份和路由元数据，不导出密码、密钥或订阅链接。
 
 当前应用使用 ad-hoc 签名，尚未做 Apple Developer ID 签名与公证；其他 Mac 的首次安装可能需要在系统设置允许打开。更新包签名独立于 Apple 签名。
 

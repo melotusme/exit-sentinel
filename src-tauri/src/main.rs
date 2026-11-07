@@ -39,7 +39,7 @@ use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 struct View {
     verdicts: Vec<verdict::Verdict>,
     gemini: claude::Monitor,
@@ -58,6 +58,8 @@ struct View {
     checking: bool,
     unacknowledged: bool,
     status: String,
+    /// Abnormal checks behind a "degraded" / "usable" status, for the menu and window.
+    issues: Vec<String>,
     last_check: String,
     notification_error: Option<String>,
     storage_error: Option<String>,
@@ -150,15 +152,36 @@ fn push_event(d: &mut Data, title: &str, detail: &str) {
     );
     d.view.history.truncate(200);
 }
+/// Exit probes that decide the status: IPv4 always, IPv6 only when required, minus ignored ones.
+fn core_probes(v: &View) -> Vec<&Probe> {
+    v.probes
+        .iter()
+        .filter(|p| !p.group.ends_with('6') || v.settings.ipv6_required)
+        .collect()
+}
+/// Names of the checks currently counted as abnormal. Ignored checks are left out.
+fn issues(v: &View) -> Vec<String> {
+    if v.paused {
+        return vec![];
+    }
+    let probes = core_probes(v)
+        .into_iter()
+        .filter(|p| !p.checked.is_empty() && p.ip.is_none())
+        .filter(|p| !v.settings.ignores(&format!("probe:{}", p.id)))
+        .map(|p| format!("{}（{}）", p.label, p.error.as_deref().unwrap_or("无结果")));
+    let sites = v
+        .service_health
+        .iter()
+        .filter(|r| r.has_confirmed_problem())
+        .filter(|r| !v.settings.ignores(&format!("site:{}", r.id)))
+        .map(|r| format!("{} 网站（{}）", r.name, r.detail));
+    probes.chain(sites).collect()
+}
 fn derive_status(v: &View) -> String {
     if v.paused {
         return "paused".into();
     }
-    let core = v
-        .probes
-        .iter()
-        .filter(|p| !p.group.ends_with('6') || v.settings.ipv6_required)
-        .collect::<Vec<_>>();
+    let core = core_probes(v);
     if core.iter().all(|p| p.checked.is_empty()) {
         return "starting".into();
     }
@@ -166,13 +189,17 @@ fn derive_status(v: &View) -> String {
     if good == 0 && !v.probes.iter().any(|p| p.ip.is_some()) {
         return "offline".into();
     }
-    if good < core.len() || v.service_health.iter().any(|r| r.has_confirmed_problem()) {
+    if !issues(v).is_empty() {
         return degraded_status(&v.verdicts).into();
     }
     if v.unacknowledged {
         return "changed".into();
     }
-    let ipv4 = core.iter().filter(|p| !p.group.ends_with('6')).collect::<Vec<_>>();
+    // Ignored probes may have no IP; compare only the ones that answered.
+    let ipv4 = core
+        .iter()
+        .filter(|p| !p.group.ends_with('6') && p.ip.is_some())
+        .collect::<Vec<_>>();
     let first = ipv4.first().and_then(|p| p.ip.as_deref());
     if ipv4.iter().any(|p| p.ip.as_deref() != first) {
         "split".into()
@@ -278,6 +305,7 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         let mut d = lock(s);
         d.view.verdicts = compute_verdicts(&d.view);
         d.view.status = derive_status(&d.view);
+        d.view.issues = issues(&d.view);
         d.view.clone()
     };
     emit_state(app, s, &v);
@@ -295,8 +323,9 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         )
     };
     let signature = format!(
-        "{}:{}:{}:{}:{:?}",
+        "{}:{:?}:{}:{}:{}:{:?}",
         v.status,
+        v.issues,
         v.paused,
         v.checking,
         v.unacknowledged,
@@ -949,6 +978,7 @@ fn main() {
                         checking: false,
                         unacknowledged: false,
                         status: "starting".into(),
+                        issues: vec![],
                         last_check: String::new(),
                         notification_error: None,
                         storage_error: load_error.or_else(|| {
@@ -1065,6 +1095,7 @@ mod cache_tests {
                     checking: false,
                     unacknowledged: false,
                     status: String::new(),
+                    issues: vec![],
                     last_check: String::new(),
                     notification_error: None,
                     storage_error: None,
@@ -1223,5 +1254,39 @@ mod status_tests {
         assert_eq!(degraded_status(&mixed), "degraded");
         assert_eq!(degraded_status(&[verdict(verdict::Level::Unknown)]), "degraded");
         assert_eq!(degraded_status(&[]), "degraded");
+    }
+
+    fn probe(id: &str, group: &str, ip: Option<&str>) -> Probe {
+        Probe {
+            id: id.into(),
+            label: id.into(),
+            group: group.into(),
+            ip: ip.map(Into::into),
+            checked: "now".into(),
+            error: ip.is_none().then(|| "超时".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issues_name_failing_checks_and_ignored_ones_do_not_degrade() {
+        let mut v = View {
+            probes: vec![
+                probe("cn-ipip", "domestic", None),
+                probe("global-cf", "foreign", Some("1.1.1.1")),
+                probe("global-v6", "foreign6", None),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(derive_status(&v), "degraded");
+        let found = issues(&v);
+        assert_eq!(found.len(), 1, "IPv6 is not required, so only IPIP counts: {found:?}");
+        assert!(found[0].contains("cn-ipip") && found[0].contains("超时"));
+        v.settings.ignored_checks = vec!["probe:cn-ipip".into()];
+        assert!(v.settings.validate().is_ok());
+        assert!(issues(&v).is_empty());
+        assert_eq!(derive_status(&v), "stable");
+        v.settings.ignored_checks = vec!["probe:nope".into()];
+        assert!(v.settings.validate().is_err());
     }
 }

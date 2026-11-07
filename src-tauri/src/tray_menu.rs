@@ -236,6 +236,12 @@ pub fn build(
     )?;
     let menu = Menu::new(app)?;
     menu.append(&status)?;
+    for (i, issue) in v.issues.iter().enumerate() {
+        menu.append(&MenuItem::with_id(app, format!("issue:{i}"), format!("　· {issue}"), false, None::<&str>)?)?;
+    }
+    if !v.issues.is_empty() {
+        menu.append(&MenuItem::with_id(app, "issue-hint", "　可在监控面板 → 设置 → 忽略的检测项中忽略", false, None::<&str>)?)?;
+    }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     for verdict in &v.verdicts {
         menu.append(&ai_service_menu(app, verdict)?)?;
@@ -251,7 +257,8 @@ pub fn build(
     let services = Submenu::with_id(app, "service-health", "网站访问状态", true)?;
     for (id, name) in [("google", "Google"), ("claude", "Claude"), ("gemini", "Gemini")] {
         let title = if v.paused { format!("{name} · 监控已暂停") }
-            else { v.service_health.iter().find(|r| r.id == id).map(|r| r.summary()).unwrap_or_else(|| format!("{name} · 等待检测")) };
+            else { v.service_health.iter().find(|r| r.id == id).map(|r| r.summary()).unwrap_or_else(|| format!("{name} · 等待检测")) }
+            + if v.settings.ignores(&format!("site:{id}")) { "（已忽略）" } else { "" };
         services.append(&MenuItem::with_id(app, format!("site-health:{id}"), title, false, None::<&str>)?)?;
     }
     menu.append(&services)?;

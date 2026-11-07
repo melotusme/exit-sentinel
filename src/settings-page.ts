@@ -18,6 +18,26 @@ export interface SettingsDeps {
   isActive: () => boolean;
 }
 let deps: SettingsDeps;
+/** Checks the user can ignore; must match IGNORABLE_CHECKS in src-tauri/src/model.rs. */
+const IGNORABLE: [string, string][] = [
+  ['site:google', 'Google 网站访问'],
+  ['site:claude', 'Claude 网站访问'],
+  ['site:gemini', 'Gemini 网站访问'],
+  ['probe:cn-ipip', '国内 · IPIP'],
+  ['probe:cn-3322', '国内 · 3322'],
+  ['probe:global-cf', '国外 · Cloudflare'],
+  ['probe:global-ipify', '国外 · ipify'],
+  ['probe:cn-v6', '国内 · IPv6'],
+  ['probe:global-v6', '国外 · IPv6'],
+];
+const ignoredChecks = (s: Settings) => `
+  <div class="field field-full">
+    <span>忽略的检测项</span>
+    <div class="ignore-grid">
+      ${IGNORABLE.map(([id, name]) => `<label class="ignore-item"><input type="checkbox" name="ignored_checks" value="${id}" ${(s.ignored_checks || []).includes(id) ? 'checked' : ''}> ${esc(name)}</label>`).join('')}
+    </div>
+    <small>勾选的项目照常检测和显示，但不再让菜单栏变成“部分检测异常”。只保存在本机。</small>
+  </div>`;
 let auto: boolean | null = null,
   autoBusy = false,
   settingsSaving = false;
@@ -61,6 +81,7 @@ export function renderSettings(s: Settings) {
           <span>要求 IPv6 出口可用<small>始终检测国内与国外 IPv6；开启后检测失败影响整体状态。本设置仅保存在本机。</small></span>
           <input name="ipv6_required" type="checkbox" ${s.ipv6_required ? 'checked' : ''}>
         </label>
+        ${ignoredChecks(s)}
         ${updateSettings()}
         <div class="settings-divider"></div>
         <div class="card-header-block compact">
@@ -215,6 +236,7 @@ document.addEventListener('submit', async event => {
       ipv6_required: f.has('ipv6_required'),
       domestic_proxy: String(f.get('domestic_proxy') || '').trim(),
       foreign_proxy: String(f.get('foreign_proxy') || '').trim(),
+      ignored_checks: f.getAll('ignored_checks').map(String),
     };
     if (!s.retain_history && deps.settings().retain_history && deps.historyCount() &&
         !await confirmAction({ title: '停止保存并清空变化记录？', message: `已有的 ${deps.historyCount()} 条变化记录将删除，之后不再保存新记录。`, confirm: '清空并保存设置', danger: true })) return;

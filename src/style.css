@@ -2122,3 +2122,20 @@ summary { cursor: pointer; min-height: 28px; line-height: 28px; font-size: 13px;
   html { scroll-behavior: auto; }
   *,*::before,*::after { scroll-behavior: auto !important; }
 }
+
+.ignore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 12px;
+  margin: 4px 0;
+}
+.ignore-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.status-issues {
+  color: var(--text-secondary);
+}

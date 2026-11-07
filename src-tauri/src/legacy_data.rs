@@ -6,16 +6,43 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const LEGACY_ID: &str = "local.mhzrm.exit-sentinel";
 pub const CURRENT_ID: &str = "dev.exit-sentinel.desktop";
+const LEGACY_PREFIX: &str = "local.";
+const LEGACY_SUFFIX: &str = ".exit-sentinel";
 
 /// Copies every legacy folder whose new counterpart does not exist yet.
 /// Returns readable errors; a failure never blocks startup.
 pub fn migrate() -> Vec<String> {
     roots()
         .into_iter()
-        .filter_map(|root| copy_if_missing(&root.join(LEGACY_ID), &root.join(CURRENT_ID)).err())
+        .filter_map(|root| {
+            let from = find_legacy(&root)?;
+            copy_if_missing(&from, &root.join(CURRENT_ID)).err()
+        })
         .collect()
+}
+
+/// Earlier builds used `local.<owner>.exit-sentinel`. Match the pattern rather
+/// than one owner name; when several exist, the most recently used one wins.
+fn find_legacy(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(is_legacy_name))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
+}
+
+fn is_legacy_name(name: &str) -> bool {
+    name.strip_prefix(LEGACY_PREFIX)
+        .and_then(|rest| rest.strip_suffix(LEGACY_SUFFIX))
+        .is_some_and(|owner| {
+            !owner.is_empty()
+                && owner
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
 }
 
 /// Parent folders that hold `<identifier>` directories on this platform.
@@ -86,6 +113,28 @@ fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEGACY_ID: &str = "local.mhzrm.exit-sentinel";
+
+    #[test]
+    fn recognises_only_legacy_folder_names() {
+        assert!(is_legacy_name(LEGACY_ID));
+        assert!(is_legacy_name("local.someone-else.exit-sentinel"));
+        assert!(!is_legacy_name("local.mhzrm.exit-sentinel.import-qa"));
+        assert!(!is_legacy_name("local..exit-sentinel"));
+        assert!(!is_legacy_name("local.a.b.exit-sentinel"));
+        assert!(!is_legacy_name(CURRENT_ID));
+    }
+
+    #[test]
+    fn finds_legacy_folder_under_root() {
+        let root = temp("find");
+        std::fs::create_dir_all(root.join("local.someone.exit-sentinel.import-qa")).unwrap();
+        assert!(find_legacy(&root).is_none());
+        std::fs::create_dir_all(root.join(LEGACY_ID)).unwrap();
+        assert_eq!(find_legacy(&root), Some(root.join(LEGACY_ID)));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -170,8 +219,12 @@ mod tests {
         let errors = migrate();
         assert!(errors.is_empty(), "{errors:?}");
         for root in roots() {
-            if root.join(LEGACY_ID).is_dir() {
-                assert!(root.join(CURRENT_ID).is_dir(), "{} not migrated", root.display());
+            if find_legacy(&root).is_some() {
+                assert!(
+                    root.join(CURRENT_ID).is_dir(),
+                    "{} not migrated",
+                    root.display()
+                );
             }
         }
     }
