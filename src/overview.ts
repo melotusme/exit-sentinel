@@ -51,7 +51,7 @@ function ipRow(x: Verdict) {
   return `<div class="verdict-row">
     <span class="verdict-label">出口 IP</span>
     <div class="verdict-value">
-      <strong class="mono">${esc(x.ip)}</strong>
+      <div class="ip-copy-line"><strong class="mono">${esc(x.ip)}</strong><button type="button" class="text-button compact" data-copy-text="${esc(x.ip)}">复制</button></div>
       <small>${esc(x.ip_source)}${x.ip_checked ? ` · ${esc(ago(x.ip_checked))}` : ''} · <span class="safety ${esc(x.ip_status || 'none')}">${safetyText(x.ip_status)}</span></small>
     </div>
     ${markButtons('ip', x, x.ip_status)}
@@ -133,7 +133,7 @@ function exitTile(v: View, group: string, title: string) {
     <small>${esc(where + tax)}</small>
     <div class="exit-tile-foot">
       <small>${p?.ip ? `${p.latency} ms · ${esc(p.label)}` : ''}</small>
-      ${p?.ip ? `<button type="button" class="text-button" data-detail="${esc(p.id)}">详情 ${icon('arrow')}</button>` : ''}
+      ${p?.ip ? `<div class="tile-actions"><button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button><button type="button" class="text-button compact" data-detail="${esc(p.id)}">详情 ${icon('arrow')}</button></div>` : ''}
     </div>
   </article>`;
 }
@@ -172,21 +172,27 @@ export function renderOverview(v: View): string {
     v.storage_error ? `配置保存失败：${v.storage_error}` : '',
     v.notification_error ? `系统通知发送失败：${v.notification_error}。请到系统设置检查通知权限。` : '',
   ].filter(Boolean);
+  const pendingList = v.pending_changes?.length
+    ? v.pending_changes.map(esc).join('<br>')
+    : v.history[0]
+      ? esc(v.history[0].detail).replace(/\n/g, '<br>')
+      : '';
   return `
     <section class="status-bar ${esc(v.status)}">
       <span class="status-symbol">${icon('pulse')}</span>
       <div class="status-text">
         <div class="status-headline"><strong>${titles[v.status] || v.status}</strong>${googleHealth(v)}</div>
+        ${v.pending_changes?.length ? `<small class="status-issues">待确认：${v.pending_changes.map(esc).join('；')}</small>` : ''}
         ${v.issues?.length ? `<small class="status-issues">异常项：${v.issues.map(esc).join('；')}。可在设置中忽略。</small>` : ''}
         <small>上次检测：${time(v.last_check)} · 每 ${v.settings.interval} 秒</small>
       </div>
       <div class="status-actions">
-        ${v.unacknowledged ? '<button type="button" id="ack" class="primary">确认变化</button>' : ''}
+        ${v.unacknowledged ? '<button type="button" id="ack" class="primary">确认已知变化</button>' : ''}
         <button type="button" data-tab="diagnostics" data-subtab="history">查看变化记录</button>
         ${v.paused ? '' : '<button type="button" id="pause">暂停监控</button>'}
       </div>
     </section>
-    ${v.unacknowledged && v.history[0] ? `<div class="alert-card" role="alert"><strong>${esc(v.history[0].title)}</strong><p>${esc(v.history[0].detail).replace(/\n/g, '<br>')}</p></div>` : ''}
+    ${v.unacknowledged && pendingList ? `<div class="alert-card" role="alert"><strong>待确认变化（${v.pending_changes?.length || 1} 项）</strong><p>${pendingList}</p></div>` : ''}
     ${warnings.map(w => `<p class="warning">${esc(w)}</p>`).join('')}
     ${v.settings.manual_nodes_only ? '<div class="notice"><p><strong>自动节点识别已关闭。</strong>判定只能依靠出口 IP。</p><button type="button" id="enable-auto-nodes">恢复自动识别</button></div>' : ''}
 

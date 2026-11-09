@@ -2,6 +2,114 @@
 
 macOS 菜单栏 / Windows 与 Linux 托盘应用，基于 Tauri 2。分别观测国内、国外及 AI 服务出口，记录网络变化并发送本机通知。
 
+## 核心功能与实现原理
+
+### 模块与数据流
+
+前端通过 Tauri 命令读取和修改状态；Rust 后台执行网络检测、采集节点证据，再把当前结果合成为判定。界面和托盘共享同一份状态。
+
+```mermaid
+flowchart TB
+    subgraph Sources["数据来源"]
+        Sites["六个出口检测站<br/>国内 IPv4：2 个<br/>国外 IPv4：2 个<br/>国内 / 国外 IPv6：各 1 个"]
+        AI["Claude / Google / Gemini"]
+        Client["本机代理客户端<br/>Shadowrocket<br/>Clash Verge Rev"]
+    end
+    subgraph Rust["Rust 后台 · Tauri 2"]
+        Net["worker + net.rs<br/>普通出口与服务连通性"]
+        Exit["exit_worker<br/>AI 出口与 Google 地区"]
+        Route["route_worker<br/>节点与路由证据"]
+        State["共享状态 View<br/>检测结果 / 人工标记<br/>来源 / 时间"]
+        Verdict["refresh<br/>计算 AI 判定与总体状态"]
+        Net --> State
+        Exit --> State
+        Route --> State
+        State -->|"读取当前证据"| Verdict
+    end
+    Sites -->|"IP / 耗时 / 错误"| Net
+    AI -->|"HTTP 连通性"| Net
+    AI -->|"trace / STUN 或参考出口 / 地区"| Exit
+    Client -->|"节点身份与路由快照"| Route
+    State -->|"按需保存"| Local[("settings.json<br/>设置 / 历史 / 人工状态")]
+    Verdict -->|"monitor-state 事件"| UI["TypeScript 界面<br/>概览 / IP 与节点<br/>curl / 设置"]
+    Verdict -->|"图标与菜单"| Tray["系统托盘 / 菜单栏"]
+```
+
+### 一轮网络检测怎样传递数据
+
+普通出口检测和服务连通性检测并发执行。国内、国外使用各自的代理配置；IPv4、IPv6 分别验证和保存，互不回退。AI 出口另由 `exit_worker` 复核，不能用普通国外出口代替。
+
+```mermaid
+sequenceDiagram
+    participant Trigger as 周期 / 网络变化 / 手动刷新
+    participant Worker as Rust worker
+    participant Remote as 检测站与服务端
+    participant Core as 共享状态 / refresh
+    participant UI as TypeScript 界面
+    participant Tray as 系统托盘
+
+    Trigger->>Worker: 触发本轮检测，记录配置代次
+    par 国内 IPv4
+        Worker->>Remote: 通过国内路径请求 IPIP、3322
+        Remote-->>Worker: IPv4 或错误
+    and 国外 IPv4
+        Worker->>Remote: 通过国外路径请求 Cloudflare、ipify
+        Remote-->>Worker: IPv4 或错误
+    and IPv6
+        Worker->>Remote: 分别通过国内、国外路径请求 IPv6 站点
+        Remote-->>Worker: IPv6 或错误
+    and 服务连通性
+        Worker->>Remote: 检查 Google、Claude、Gemini
+        Remote-->>Worker: HTTP 结果与连通性证据
+    end
+    Worker->>Worker: 校验响应地址族，记录耗时、来源与时间
+    alt 配置代次已变化，或监控已暂停
+        Worker->>Worker: 丢弃本轮过时结果
+    else 结果仍有效
+        Worker->>Core: 更新当前 IP / 错误 / 连通性
+        Note over Worker,Core: 失败时当前 IP 为空；历史 IP 独立保留<br/>变化经稳定性确认后写入历史，并按规则通知
+        Core->>Core: 合成 AI 判定和总体状态
+        Core-->>UI: 状态有变化时发送 monitor-state
+        Core->>Tray: 更新托盘状态和分组菜单
+    end
+```
+
+### Claude / Gemini 怎样得出结论
+
+两个服务分别判断。当前出口的人工状态、节点状态和连通性共同参与；Gemini 额外参考 Google 对当前路径的地区判断。暂停时直接显示“监控已暂停”，运行中的判定顺序对应 `verdict.rs`：
+
+```mermaid
+flowchart TD
+    Start["当前服务的出口与节点证据"] --> RiskCheck{"存在风险证据？<br/>IP 或节点已标记风险<br/>或 Gemini 地区受限"}
+    RiskCheck -->|"是"| Risk["有风险"]
+    RiskCheck -->|"否"| Health{"服务已确认不可达？"}
+    Health -->|"是"| Unreachable["提示当前无法访问"]
+    Health -->|"否 / 尚未确认"| HasIP{"有当前出口 IP？"}
+    HasIP -->|"是"| IPStatus["读取当前 IP 的人工状态"]
+    HasIP -->|"否"| HasNode{"有当前节点证据？"}
+    HasNode -->|"否"| Unknown["出口未确认"]
+    HasNode -->|"是"| NodeStatus["读取当前节点的人工状态"]
+    IPStatus --> Confirmed{"所选记录已确认可用？"}
+    NodeStatus --> Confirmed
+    Confirmed -->|"是"| Safe["可以使用"]
+    Confirmed -->|"否"| Warn["需要确认"]
+```
+
+Gemini 的地区受限指 Google 返回 `CHN`、`HKG` 或 `MAC`；其他服务不套用该规则。
+
+例如：切换节点后出现新 IP，即使节点过去标记可用，新 IP 仍然需要确认；普通国外检测成功，也不能证明 Claude / Gemini 的当前路径或账号可用。
+
+### 代码入口
+
+| 核心机制 | 实现方式与代码入口 |
+| --- | --- |
+| 独立观测出口 | [`net.rs`](src-tauri/src/net.rs) 定义 2 个国内 IPv4、2 个国外 IPv4、国内与国外各 1 个 IPv6 检测站；按通道使用代理并校验返回地址族。失败会清空当前 IP，历史 IP 单独保留。 |
+| 按需并发检测 | [`main.rs`](src-tauri/src/main.rs) 的 `worker` 根据周期、网络变化或手动刷新触发，并发执行出口与服务连通性检测。配置代次校验会丢弃已过时的请求结果。 |
+| 观测 AI 实际路径 | [`exit_worker.rs`](src-tauri/src/exit_worker.rs) 独立复核 Claude trace、Gemini 的 Google 地区与 STUN / 参考出口；[`shadowrocket.rs`](src-tauri/src/shadowrocket.rs) 和 [`clash_verge.rs`](src-tauri/src/clash_verge.rs) 提供节点快照，保留取证来源。 |
+| 给出保守判定 | [`verdict.rs`](src-tauri/src/verdict.rs) 合成当前出口、IP / 节点人工标记、连通性和地区证据。风险优先；有当前 IP 时以 IP 标记判断可用性，否则才参考节点标记。Gemini 还检查 Google 地区。 |
+| 托盘、界面与通知 | Rust 维护共享状态并更新托盘，通过 `monitor-state` 事件驱动 [`src/main.ts`](src/main.ts) 的 TypeScript 界面；变化记录本地保存，并按监控规则发送本机通知。 |
+| 辅助诊断与跨设备配置 | [`diagnostics.rs`](src-tauri/src/diagnostics.rs) 提供 curl 请求与阶段耗时；[`sync.rs`](src-tauri/src/sync.rs) 手动同步 WebDAV 配置；[`updates.rs`](src-tauri/src/updates.rs) 检查公开 Release，更新包由 Tauri 校验签名。 |
+
 ## 功能
 
 - 国内 / 国外 IPv4、IPv6 检测站独立监控；可设置是否要求 IPv6 可用。

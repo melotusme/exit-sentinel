@@ -118,6 +118,9 @@ pub(crate) fn mark_service_ip(
             &now(),
         )?;
         remember_observed_route(&mut d.view, service, ip);
+        if status != claude::Safety::Pending {
+            crate::resolve_service_pending(&mut d.view, service);
+        }
         push_event(
             &mut d,
             "手动设置 AI 服务 IP",
@@ -233,7 +236,10 @@ pub(crate) async fn mark_node(
             route.node_name,
             safety_label(&status)
         );
-        shadowrocket::upsert_node(&mut d.view.ai_nodes, service, route, status, note, &now())?;
+        shadowrocket::upsert_node(&mut d.view.ai_nodes, service, route, status.clone(), note, &now())?;
+        if status != claude::Safety::Pending {
+            crate::resolve_service_pending(&mut d.view, service);
+        }
         push_event(&mut d, "手动设置 AI 服务节点", &detail);
     }
     persist(s);
@@ -292,11 +298,14 @@ pub(crate) async fn save_claude_ip(
             &mut d.view.claude_ips,
             &service,
             &normalized,
-            status,
+            status.clone(),
             note,
             &now(),
         )?;
         remember_observed_route(&mut d.view, &service, &normalized);
+        if status != claude::Safety::Pending {
+            crate::resolve_service_pending(&mut d.view, &service);
+        }
         if let Some(route) = manual_route {
             if let Some(record) = d
                 .view

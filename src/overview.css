@@ -115,6 +115,9 @@
 .verdict-value strong { font-size: 14px; overflow-wrap: anywhere; }
 .verdict-value small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .verdict-value .safety { padding: 0 7px; font-size: 11px; }
+.ip-copy-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.text-button.compact { padding: 2px 8px; font-size: 11.5px; min-height: 22px; }
+.tile-actions { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .safety.none { color: var(--muted); }
 .verdict-note { color: var(--muted); font-size: 12px; max-width: 140px; text-align: right; }
 

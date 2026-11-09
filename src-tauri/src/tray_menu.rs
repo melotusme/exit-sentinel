@@ -158,13 +158,34 @@ pub fn build(
         sub.append(&detail)?;
         Ok(sub)
     };
-    let cn = Submenu::with_id(app, "domestic-exit", "国内出口", true)?;
+    let cn = Submenu::with_id(
+        app,
+        "domestic-exit",
+        tray::exit_group_title("国内出口", "domestic", "domestic6", &v.probes, geodata, v.paused, v.checking),
+        true,
+    )?;
+    if let Some(ip) = tray::exit_probe(&v.probes, "domestic").and_then(|p| p.ip.as_deref()) {
+        let id = "copy:quick:domestic".to_string();
+        cn.append(&MenuItem::with_id(app, &id, format!("复制 IPv4：{ip}"), true, None::<&str>)?)?;
+        cn.append(&PredefinedMenuItem::separator(app)?)?;
+        copies.insert(id, ip.to_string());
+    }
     cn.append(&make_family_menu("domestic", "IPv4", &mut copies)?)?;
     cn.append(&make_family_menu("domestic6", "IPv6", &mut copies)?)?;
-    let gl = Submenu::with_id(app, "foreign-exit", "国外出口", true)?;
+    let gl = Submenu::with_id(
+        app,
+        "foreign-exit",
+        tray::exit_group_title("国外出口", "foreign", "foreign6", &v.probes, geodata, v.paused, v.checking),
+        true,
+    )?;
+    if let Some(ip) = tray::exit_probe(&v.probes, "foreign").and_then(|p| p.ip.as_deref()) {
+        let id = "copy:quick:foreign".to_string();
+        gl.append(&MenuItem::with_id(app, &id, format!("复制 IPv4：{ip}"), true, None::<&str>)?)?;
+        gl.append(&PredefinedMenuItem::separator(app)?)?;
+        copies.insert(id, ip.to_string());
+    }
     gl.append(&make_family_menu("foreign", "IPv4", &mut copies)?)?;
     gl.append(&make_family_menu("foreign6", "IPv6", &mut copies)?)?;
-    lock(s).copy_values = copies;
     let curl_menu = Submenu::with_id(app, "curl-tests", "网站连通性 · curl", true)?;
     curl_menu.append(&MenuItem::with_id(
         app,
@@ -204,12 +225,10 @@ pub fn build(
     let check = MenuItem::with_id(
         app,
         "check",
-        "立即检测",
+        if v.checking { "正在检测…" } else { "立即检测" },
         !v.paused && !v.checking,
         None::<&str>,
     )?;
-    let ack =
-        MenuItem::with_id(app, "ack", "确认已知变化", v.unacknowledged, None::<&str>)?;
     let pause = MenuItem::with_id(
         app,
         "pause",
@@ -236,6 +255,27 @@ pub fn build(
     )?;
     let menu = Menu::new(app)?;
     menu.append(&status)?;
+    if v.unacknowledged {
+        let changes: Vec<String> = if !v.pending_changes.is_empty() {
+            v.pending_changes.clone()
+        } else {
+            v.history
+                .first()
+                .map(|e| format!("{}：{}", e.title, e.detail.lines().next().unwrap_or_default()))
+                .into_iter()
+                .collect()
+        };
+        for (i, change) in changes.iter().enumerate() {
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("change:{i}"),
+                format!("　· {change}"),
+                false,
+                None::<&str>,
+            )?)?;
+        }
+        menu.append(&MenuItem::with_id(app, "ack", "✓ 确认已知变化", true, None::<&str>)?)?;
+    }
     for (i, issue) in v.issues.iter().enumerate() {
         menu.append(&MenuItem::with_id(app, format!("issue:{i}"), format!("　· {issue}"), false, None::<&str>)?)?;
     }
@@ -244,8 +284,9 @@ pub fn build(
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     for verdict in &v.verdicts {
-        menu.append(&ai_service_menu(app, verdict)?)?;
+        menu.append(&ai_service_menu(app, verdict, &mut copies)?)?;
     }
+    lock(s).copy_values = copies;
     menu.append(&MenuItem::with_id(
         app,
         "ai-test",
@@ -254,34 +295,69 @@ pub fn build(
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    let services = Submenu::with_id(app, "service-health", "网站访问状态", true)?;
+    let health_summary = if v.paused {
+        "网站访问状态 · 已暂停".to_string()
+    } else if v.service_health.is_empty() {
+        "网站访问状态 · 等待检测".to_string()
+    } else {
+        let bad: Vec<String> = v
+            .service_health
+            .iter()
+            .filter(|r| r.status != crate::connectivity::Status::Reachable && !v.settings.ignores(&format!("site:{}", r.id)))
+            .map(|r| format!("{} {}", r.name, r.status.label()))
+            .collect();
+        if bad.is_empty() {
+            "网站访问状态 · 全部正常".to_string()
+        } else {
+            format!("网站访问状态 · {}", bad.join(" / "))
+        }
+    };
+    let services = Submenu::with_id(app, "service-health", health_summary, true)?;
     for (id, name) in [("google", "Google"), ("claude", "Claude"), ("gemini", "Gemini")] {
-        let title = if v.paused { format!("{name} · 监控已暂停") }
-            else { v.service_health.iter().find(|r| r.id == id).map(|r| r.summary()).unwrap_or_else(|| format!("{name} · 等待检测")) }
-            + if v.settings.ignores(&format!("site:{id}")) { "（已忽略）" } else { "" };
+        let title = if v.paused {
+            format!("{name} · 监控已暂停")
+        } else {
+            v.service_health
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| {
+                    if r.detail.is_empty() {
+                        r.summary()
+                    } else {
+                        format!("{}（{}）", r.summary(), r.detail)
+                    }
+                })
+                .unwrap_or_else(|| format!("{name} · 等待检测"))
+        } + if v.settings.ignores(&format!("site:{id}")) {
+            "（已忽略）"
+        } else {
+            ""
+        };
         services.append(&MenuItem::with_id(app, format!("site-health:{id}"), title, false, None::<&str>)?)?;
     }
-    menu.append(&services)?;
     menu.append(&cn)?;
     menu.append(&gl)?;
+    menu.append(&services)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&open)?;
+    menu.append(&check)?;
+    if v.paused {
+        menu.append(&MenuItem::with_id(app, "pause", "恢复监控", true, None::<&str>)?)?;
+    }
     menu.append(&curl_menu)?;
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&autostart_item)?;
-    menu.append(&MenuItem::with_id(
+    let maintenance = Submenu::with_id(app, "maintenance", "设置与维护", true)?;
+    maintenance.append(&pause)?;
+    maintenance.append(&PredefinedMenuItem::separator(app)?)?;
+    maintenance.append(&autostart_item)?;
+    maintenance.append(&data_settings)?;
+    maintenance.append(&MenuItem::with_id(
         app,
         "update",
         "检查软件更新…",
         true,
         None::<&str>,
     )?)?;
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&open)?;
-    menu.append(&data_settings)?;
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&check)?;
-    menu.append(&ack)?;
-    menu.append(&pause)?;
+    menu.append(&maintenance)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&quit)?;
     Ok(menu)
@@ -308,15 +384,37 @@ fn action(app: &tauri::AppHandle, id: String, text: &str) -> tauri::Result<MenuI
     MenuItem::with_id(app, id, text, true, None::<&str>)
 }
 
-/// One submenu per service: verdict in the title, IP and node with one-click marking.
-fn ai_service_menu(app: &tauri::AppHandle, x: &verdict::Verdict) -> tauri::Result<Submenu<tauri::Wry>> {
+/// One submenu per service: concise verdict + node/IP in the title, one-click marking inside.
+fn ai_service_menu(
+    app: &tauri::AppHandle,
+    x: &verdict::Verdict,
+    copies: &mut HashMap<String, String>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
     let service = x.service.as_str();
-    let sub = Submenu::with_id(app, format!("ai-service:{service}"), format!("{} {} · {}", level_mark(x.level), x.name, x.headline), true)?;
+    let sub = Submenu::with_id(
+        app,
+        format!("ai-service:{service}"),
+        tray::ai_service_title(level_mark(x.level), x),
+        true,
+    )?;
+    sub.append(&info(app, format!("ai-headline:{service}"), format!("结论：{}", x.headline))?)?;
+    sub.append(&PredefinedMenuItem::separator(app)?)?;
     match &x.ip {
         Some(ip) => {
-            sub.append(&info(app, format!("ai-ip:{service}"), format!("出口 IP：{ip}（{}）· {}", x.ip_source, status_text(&x.ip_status)))?)?;
-            for (status, label) in [("safe", "IP 标为可用"), ("risk", "IP 标为风险"), ("pending", "IP 标为待确认")] {
-                sub.append(&action(app, format!("ai-mark:{service}:{status}:{ip}"), label)?)?;
+            let copy_id = format!("copy:ai-ip:{service}");
+            sub.append(&action(
+                app,
+                copy_id.clone(),
+                &format!("出口 IP：{ip}（{}）· {}（点击复制）", x.ip_source, status_text(&x.ip_status)),
+            )?)?;
+            copies.insert(copy_id, ip.clone());
+            for (status, expected, label) in [
+                ("safe", crate::claude::Safety::Safe, "IP 标为可用"),
+                ("risk", crate::claude::Safety::Risk, "IP 标为风险"),
+                ("pending", crate::claude::Safety::Pending, "IP 标为待确认"),
+            ] {
+                let prefix = if x.ip_status.as_ref() == Some(&expected) { "✓ " } else { "" };
+                sub.append(&action(app, format!("ai-mark:{service}:{status}:{ip}"), &format!("{prefix}{label}"))?)?;
             }
         }
         None => sub.append(&info(app, format!("ai-ip:{service}"), format!("出口 IP：未确认 · {}", x.ip_hint))?)?,
@@ -334,8 +432,17 @@ fn ai_service_menu(app: &tauri::AppHandle, x: &verdict::Verdict) -> tauri::Resul
         sub.append(&info(app, format!("ai-node:{service}"), format!("节点：{}（{}{age}）· {}", x.node_name, x.node_source, status_text(&x.node_status)))?)?;
     }
     if !x.node_key.is_empty() {
-        for (status, label) in [("safe", "节点标为可用"), ("risk", "节点标为风险"), ("pending", "节点标为待确认")] {
-            sub.append(&action(app, format!("ai-node-mark:{service}:{status}:{}", x.node_key), label)?)?;
+        for (status, expected, label) in [
+            ("safe", crate::claude::Safety::Safe, "节点标为可用"),
+            ("risk", crate::claude::Safety::Risk, "节点标为风险"),
+            ("pending", crate::claude::Safety::Pending, "节点标为待确认"),
+        ] {
+            let prefix = if x.node_status.as_ref() == Some(&expected) { "✓ " } else { "" };
+            sub.append(&action(
+                app,
+                format!("ai-node-mark:{service}:{status}:{}", x.node_key),
+                &format!("{prefix}{label}"),
+            )?)?;
         }
     }
     sub.append(&PredefinedMenuItem::separator(app)?)?;
@@ -384,7 +491,8 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         if parts.len() == 4 {
             let result = parse_safety(parts[2]).and_then(|status| mark_service_ip(&s, parts[1], parts[3], status));
             let message = result.map(|_| format!("{} · {} 状态已保存", parts[1], parts[3])).unwrap_or_else(|e| e);
-            let _ = app.emit("ai-status-saved", message);
+            let _ = app.emit("ai-status-saved", &message);
+            notify(app, &s, "出口哨兵 · IP 登记", &message);
             refresh(app, &s);
         }
         return;
@@ -446,7 +554,7 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         "open" => show(app),
         "check" => s.wake.notify_one(),
         "ack" => {
-            lock(&s).view.unacknowledged = false;
+            crate::clear_pending_changes(&mut lock(&s).view);
             refresh(app, &s);
         }
         "pause" => {

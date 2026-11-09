@@ -86,6 +86,8 @@ impl Watch {
     }
 }
 pub struct Alert {
+    pub id: String,
+    pub recovered: bool,
     pub title: String,
     pub detail: String,
 }
@@ -103,14 +105,18 @@ impl IpChanges {
             .into_iter()
             .enumerate()
             .filter_map(|(i, value)| {
-                self.families[i]
+                let family = &mut self.families[i];
+                family
                     .observe(value)
-                    .and_then(|(old, new)| match (old, new) {
-                        (Some(old), Some(new)) => Some(format!(
-                            "Claude {} 出口 IP 变化：{old} → {new}",
-                            if i == 0 { "IPv4" } else { "IPv6" }
-                        )),
-                        _ => None,
+                    .and_then(|(old, new)| {
+                        let old = old.or_else(|| family.prior_some().map(String::from));
+                        match (old, new) {
+                            (Some(old), Some(new)) if old != new => Some(format!(
+                                "Claude {} 出口 IP 变化：{old} → {new}",
+                                if i == 0 { "IPv4" } else { "IPv6" }
+                            )),
+                            _ => None,
+                        }
                     })
             })
             .collect()
@@ -136,6 +142,8 @@ impl Monitor {
                     }
                 );
                 alerts.push(Alert {
+                    id: r.id.clone(),
+                    recovered: r.status == Status::Reachable,
                     title,
                     detail: format!(
                         "{}：{}。连续两次检测确认；{}。本应用请求，不代表登录或账号状态。",

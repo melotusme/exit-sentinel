@@ -107,6 +107,7 @@ export interface View {
   unacknowledged: boolean;
   status: string;
   issues: string[];
+  pending_changes: string[];
   last_check: string;
   notification_error: string | null;
   storage_error: string | null;

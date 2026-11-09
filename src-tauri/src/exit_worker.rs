@@ -24,6 +24,9 @@ impl Watch {
     fn settle(&mut self, path: String) {
         self.path = path;
     }
+    fn retry_soon(&mut self) {
+        self.last = None;
+    }
     fn due(&mut self, path: &str, every: Duration, force: bool) -> bool {
         let due = force || self.path != path || self.last.map_or(true, |t| t.elapsed() >= every);
         if due {
@@ -38,7 +41,8 @@ impl Watch {
 #[derive(Default)]
 struct Alerts {
     active: String,
-    failed: bool,
+    failed_count: u8,
+    failed_alerted: bool,
     ip_changes: connectivity::IpChanges,
 }
 
@@ -156,11 +160,20 @@ async fn observe_exit(s: &Shared, service: &str, url: &str, proxy: &str, manual_
 }
 
 /// First-seen / not-yet-safe / IP-change alerts, only while Claude Desktop is running.
-fn claude_alerts(s: &Shared, alerts: &mut Alerts, v4: &Probe, v6: &Probe, route: &shadowrocket::RouteSnapshot) -> Option<String> {
+fn claude_alerts(
+    s: &Shared,
+    alerts: &mut Alerts,
+    v4: &Probe,
+    v6: &Probe,
+    route: &shadowrocket::RouteSnapshot,
+    ipv6_enabled: bool,
+) -> Option<String> {
     let mut d = lock(s);
     let mut warning = None;
     if v4.ip.is_some() || v6.ip.is_some() {
-        alerts.failed = false;
+        alerts.failed_count = 0;
+        alerts.failed_alerted = false;
+        crate::resolve_pending_change(&mut d.view, "Claude 出口未确认");
         let key = format!("{:?}:{:?}:{}:{}", v4.ip, v6.ip, route.fingerprint, route.error);
         if alerts.active != key {
             let stamp = now();
@@ -174,28 +187,44 @@ fn claude_alerts(s: &Shared, alerts: &mut Alerts, v4: &Probe, v6: &Probe, route:
                 })
                 .collect();
             if !warnings.is_empty() {
+                let joined = warnings.join("；");
+                crate::record_pending_change(&mut d.view, "Claude 出口待确认", format!("Claude 出口待确认：{joined}"));
                 warning = Some(format!("{}\n节点快照：{}", warnings.join("\n"), route.summary()));
+            } else {
+                crate::resolve_pending_change(&mut d.view, "Claude 出口待确认");
             }
             alerts.active = key;
         }
     } else {
         alerts.active.clear();
-        if !alerts.failed {
-            warning = Some(format!(
-                "Claude 正在运行，但 IPv4 和 IPv6 出口均未确认：IPv4 {}；IPv6 {}",
-                v4.error.clone().unwrap_or_default(),
-                v6.error.clone().unwrap_or_default()
-            ));
+        alerts.failed_count = alerts.failed_count.saturating_add(1);
+        if alerts.failed_count >= 2 && !alerts.failed_alerted {
+            alerts.failed_alerted = true;
+            let v4_err = v4.error.clone().unwrap_or_else(|| "无结果".into());
+            let body = if ipv6_enabled {
+                format!(
+                    "Claude 正在运行，但 IPv4 和 IPv6 出口均未确认：IPv4 {v4_err}；IPv6 {}",
+                    v6.error.clone().unwrap_or_default()
+                )
+            } else {
+                format!("Claude 正在运行，但出口 IP 未确认：{v4_err}（连续两次确认）")
+            };
+            crate::record_pending_change(
+                &mut d.view,
+                "Claude 出口未确认",
+                format!("Claude 出口未确认：{v4_err}"),
+            );
+            warning = Some(body);
         }
-        alerts.failed = true;
     }
     let changes = alerts.ip_changes.observe(v4.ip.clone(), v6.ip.clone());
     if !changes.is_empty() {
-        let change = format!("{}；本应用同域名请求，连续两次确认", changes.join("；"));
+        let joined = changes.join("；");
+        crate::record_pending_change(&mut d.view, "Claude 出口变化", format!("Claude 出口变化：{joined}"));
+        let change = format!("{joined}；本应用同域名请求，连续两次确认");
         warning = Some(match warning { Some(w) => format!("{w}\n{change}"), None => change });
     }
     if let Some(body) = &warning {
-        d.view.unacknowledged = true;
         push_event(&mut d, "Claude 出口告警", body);
     }
     warning
@@ -228,7 +257,8 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
         let is_running = running == Ok(true);
         if !is_running {
             alerts.active.clear();
-            alerts.failed = false;
+            alerts.failed_count = 0;
+            alerts.failed_alerted = false;
             alerts.ip_changes = connectivity::IpChanges::default();
         }
         let just_started = is_running && !previous_running;
@@ -243,8 +273,9 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
             let observed = observe_exit(&s, "claude", CLAUDE_TRACE, &settings.claude_proxy, settings.manual_nodes_only, generation).await;
             // Re-check the process after the round trip; never alert for a closed app.
             let still_running = tokio::task::spawn_blocking(claude::running).await.ok().and_then(Result::ok) == Some(true);
+            let ipv6_enabled = settings.ipv6 || settings.ipv6_required;
             let warning = match observed {
-                Some((v4, v6, route)) if still_running => claude_alerts(&s, &mut alerts, &v4, &v6, &route),
+                Some((v4, v6, route)) if still_running => claude_alerts(&s, &mut alerts, &v4, &v6, &route, ipv6_enabled),
                 _ => None,
             };
             if let Some(body) = &warning {
@@ -253,7 +284,11 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
             if warning.is_some() || records_signature(&s) != records_before {
                 persist(&s);
             }
-            claude_watch.settle(claude_path(fingerprint("claude")));
+            if alerts.failed_count == 1 {
+                claude_watch.retry_soon();
+            } else {
+                claude_watch.settle(claude_path(fingerprint("claude")));
+            }
         }
 
         let gemini_path = |fp: String| format!("{}|{}|{}|{}", settings.gemini_proxy, settings.gemini_ip_url, network, fp);

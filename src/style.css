@@ -478,13 +478,15 @@ main {
 }
 
 .top-status-pill.degraded,
-.top-status-pill.changed {
+.top-status-pill.changed,
+.top-status-pill.warn {
   background: var(--warning-tonal);
   color: var(--amber);
   border-color: var(--warning-border);
 }
 
-.top-status-pill.offline {
+.top-status-pill.offline,
+.top-status-pill.risk {
   background: var(--danger-tonal);
   color: var(--danger);
   border-color: var(--danger-border);
@@ -565,23 +567,27 @@ main {
 }
 
 .status-bar.degraded,
-.status-bar.changed {
+.status-bar.changed,
+.status-bar.warn {
   border-color: var(--warning-border);
   border-left-color: var(--amber);
 }
 
 .status-bar.degraded .status-symbol,
-.status-bar.changed .status-symbol {
+.status-bar.changed .status-symbol,
+.status-bar.warn .status-symbol {
   background: var(--warning-tonal);
   color: var(--amber);
 }
 
-.status-bar.offline {
+.status-bar.offline,
+.status-bar.risk {
   border-color: var(--danger-border);
   border-left-color: var(--danger);
 }
 
-.status-bar.offline .status-symbol {
+.status-bar.offline .status-symbol,
+.status-bar.risk .status-symbol {
   background: var(--danger-tonal);
   color: var(--danger);
 }

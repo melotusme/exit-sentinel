@@ -281,6 +281,38 @@ pub fn network_snapshot() -> String {
     let route6 = route6.lines().filter(|l| l.contains("interface:") || l.contains("gateway:")).collect::<Vec<_>>().join("\n");
     format!("{nwi}\n\nIPv4 默认路由\n{route}\n\nIPv6 默认路由\n{route6}\n\nmacOS 系统代理（仅展示，不自动导入 PAC）\n{proxy}")
 }
+/// Summarize which parts of the local network snapshot changed between two readings.
+pub fn describe_network_change(old: Option<&str>, new: &str) -> String {
+    let Some(old) = old else {
+        return "本机网络已初始化".into();
+    };
+    let split = |s: &str| -> [String; 4] {
+        let mut parts = [String::new(), String::new(), String::new(), String::new()];
+        let mut idx = 0usize;
+        for line in s.lines() {
+            if line.contains("IPv4 默认路由") || line.contains("Windows IPv4 路由") {
+                idx = 1;
+            } else if line.contains("IPv6 默认路由") || line.contains("Windows IPv6 路由") {
+                idx = 2;
+            } else if line.contains("系统代理") || line.contains("环境代理变量") {
+                idx = 3;
+            } else {
+                parts[idx].push_str(line.trim());
+                parts[idx].push('\n');
+            }
+        }
+        parts
+    };
+    let a = split(old);
+    let b = split(new);
+    let labels = ["局域网接口 / 地址", "IPv4 默认路由", "IPv6 默认路由", "系统代理"];
+    let changed: Vec<&str> = (0..4).filter(|&i| a[i] != b[i]).map(|i| labels[i]).collect();
+    if changed.is_empty() {
+        "本机网络状态更新".into()
+    } else {
+        format!("变化项：{}", changed.join("、"))
+    }
+}
 pub async fn geo(ip: &str, proxy: &str) -> Result<Value, String> {
     let ip = public_ip(ip)?;
     let c = client(proxy, true)?;
@@ -569,5 +601,12 @@ mod env_proxy_tests {
         assert!(out.contains("no_proxy=localhost,127.0.0.1"));
         assert!(!out.contains("secret") && !out.contains("user"));
         assert_eq!(super::env_proxy_summary(|_| None), "未设置");
+    }
+
+    #[test]
+    fn describes_specific_network_snapshot_sections_that_changed() {
+        let a = "局域网接口 / 地址\nen0 192.168.1.2\nIPv4 默认路由\ngateway: 192.168.1.1\nIPv6 默认路由\nnone\n系统代理（仅展示，不执行 PAC）\nHTTPEnable : 0";
+        let b = "局域网接口 / 地址\nen0 192.168.1.2\nIPv4 默认路由\ngateway: 192.168.1.1\nIPv6 默认路由\nnone\n系统代理（仅展示，不执行 PAC）\nHTTPEnable : 1";
+        assert_eq!(super::describe_network_change(Some(a), b), "变化项：系统代理");
     }
 }

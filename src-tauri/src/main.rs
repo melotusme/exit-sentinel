@@ -60,6 +60,8 @@ struct View {
     status: String,
     /// Abnormal checks behind a "degraded" / "usable" status, for the menu and window.
     issues: Vec<String>,
+    /// Unacknowledged exit/AI changes behind a "changed" status, for the menu and window.
+    pending_changes: Vec<String>,
     last_check: String,
     notification_error: Option<String>,
     storage_error: Option<String>,
@@ -152,6 +154,28 @@ fn push_event(d: &mut Data, title: &str, detail: &str) {
     );
     d.view.history.truncate(200);
 }
+pub(crate) fn record_pending_change(v: &mut View, prefix: &str, text: String) {
+    v.pending_changes.retain(|item| !item.starts_with(prefix));
+    v.pending_changes.insert(0, text);
+    v.pending_changes.truncate(8);
+    v.unacknowledged = !v.pending_changes.is_empty();
+}
+pub(crate) fn resolve_pending_change(v: &mut View, prefix: &str) {
+    v.pending_changes.retain(|item| !item.starts_with(prefix));
+    v.unacknowledged = !v.pending_changes.is_empty();
+}
+pub(crate) fn resolve_service_pending(v: &mut View, service: &str) {
+    let name = if service == "gemini" { "Gemini" } else { "Claude" };
+    resolve_pending_change(v, &format!("{name} "));
+    v.verdicts = compute_verdicts(v);
+    if !v.verdicts.is_empty() && v.verdicts.iter().all(|x| x.level == verdict::Level::Safe) {
+        resolve_pending_change(v, "出口 IP 变化 · 国外");
+    }
+}
+pub(crate) fn clear_pending_changes(v: &mut View) {
+    v.pending_changes.clear();
+    v.unacknowledged = false;
+}
 /// Exit probes that decide the status: IPv4 always, IPv6 only when required, minus ignored ones.
 fn core_probes(v: &View) -> Vec<&Probe> {
     v.probes
@@ -189,11 +213,17 @@ fn derive_status(v: &View) -> String {
     if good == 0 && !v.probes.iter().any(|p| p.ip.is_some()) {
         return "offline".into();
     }
+    if v.verdicts.iter().any(|x| x.level == verdict::Level::Risk) {
+        return "risk".into();
+    }
     if !issues(v).is_empty() {
         return degraded_status(&v.verdicts).into();
     }
     if v.unacknowledged {
         return "changed".into();
+    }
+    if v.verdicts.iter().any(|x| x.level == verdict::Level::Warn) {
+        return "warn".into();
     }
     // Ignored probes may have no IP; compare only the ones that answered.
     let ipv4 = core
@@ -216,9 +246,11 @@ fn label(s: &str) -> &str {
     match s {
         "paused" => "已暂停",
         "offline" => "所有检测站不可达",
+        "risk" => "存在风险出口 · 请勿使用",
         "degraded" => "部分检测异常",
         "usable" => "可以使用 · 部分辅助检测异常",
         "changed" => "变化待确认",
+        "warn" => "AI 出口待确认",
         "split" => "多个出口 · 正常监控",
         "stable" => "出口一致 · 正常监控",
         _ => "等待首次检测",
@@ -227,8 +259,8 @@ fn label(s: &str) -> &str {
 fn tray_image(status: &str) -> Image<'static> {
     let mut rgba = vec![0; 36 * 36 * 4];
     let color = match status {
-        "offline" => [240, 82, 82, 255],
-        "changed" | "degraded" => [240, 174, 50, 255],
+        "offline" | "risk" => [240, 82, 82, 255],
+        "changed" | "degraded" | "warn" => [240, 174, 50, 255],
         "stable" | "split" | "usable" => [62, 205, 148, 255],
         _ => [155, 163, 175, 255],
     };
@@ -242,12 +274,12 @@ fn tray_image(status: &str) -> Image<'static> {
                         || ((x - 26).pow(2) + (y - 18).pow(2) < 42)
                         || (y >= 16 && y <= 20 && x > 10 && x < 26)
                 }
-                "changed" | "degraded" => {
+                "changed" | "degraded" | "warn" => {
                     (dx.abs() <= y / 2 && y > 3 && y < 32)
                         && (!(16..=20).contains(&x)
                             || (!(10..=21).contains(&y) && !(25..=28).contains(&y)))
                 }
-                "offline" => {
+                "offline" | "risk" => {
                     dx * dx + dy * dy < 225
                         && (dx.abs() < 3 || dy.abs() < 3 || dx * dx + dy * dy > 155)
                 }
@@ -303,10 +335,20 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
     let autostart = app.autolaunch().is_enabled().ok();
     let v = {
         let mut d = lock(s);
-        d.view.verdicts = compute_verdicts(&d.view);
-        d.view.status = derive_status(&d.view);
-        d.view.issues = issues(&d.view);
-        d.view.clone()
+        let view = &mut d.view;
+        view.verdicts = compute_verdicts(view);
+        for item in &view.verdicts {
+            if item.level == verdict::Level::Safe {
+                let prefix = format!("{} 出口", item.name);
+                view.pending_changes.retain(|c| !c.starts_with(&prefix));
+            }
+        }
+        if view.pending_changes.is_empty() {
+            view.unacknowledged = false;
+        }
+        view.status = derive_status(view);
+        view.issues = issues(view);
+        view.clone()
     };
     emit_state(app, s, &v);
     let (geodata, nearbydata) = {
@@ -323,9 +365,10 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         )
     };
     let signature = format!(
-        "{}:{:?}:{}:{}:{}:{:?}",
+        "{}:{:?}:{:?}:{}:{}:{}:{:?}",
         v.status,
         v.issues,
+        v.pending_changes,
         v.paused,
         v.checking,
         v.unacknowledged,
@@ -481,7 +524,7 @@ fn check_now(s: tauri::State<Shared>) {
 }
 #[tauri::command]
 fn acknowledge(app: tauri::AppHandle, s: tauri::State<Shared>) {
-    lock(&s).view.unacknowledged = false;
+    clear_pending_changes(&mut lock(&s).view);
     refresh(&app, &s);
 }
 #[tauri::command]
@@ -517,6 +560,8 @@ fn save_settings(
             d.view.service_health.clear();
             d.view.current_routes.clear();
             d.view.claude = claude::Monitor::default();
+            resolve_pending_change(&mut d.view, "Claude ");
+            resolve_pending_change(&mut d.view, "Gemini ");
         }
         let reset = old.ipv6 != settings.ipv6
             || old.domestic_proxy != settings.domestic_proxy
@@ -525,6 +570,7 @@ fn save_settings(
         d.generation += 1;
         if reset {
             d.view.probes = net::probes(settings.ipv6);
+            resolve_pending_change(&mut d.view, "出口 IP 变化 ·");
             push_event(
                 &mut d,
                 "检测路径设置已更改",
@@ -603,7 +649,7 @@ fn reset_data(d: &mut Data, scope: &str) -> Result<(), String> {
         d.view.ai_nodes.clear(); d.view.claude_ips.clear(); d.view.ai_tests.clear();
         d.view.current_routes.clear(); d.view.claude = claude::Monitor::default();
         d.view.paused = true;
-        d.view.unacknowledged = false;
+        clear_pending_changes(&mut d.view);
         d.generation += 1;
     }
     // History can contain old IPs and nodes, so clear it together with AI data.
@@ -763,6 +809,80 @@ async fn route_worker(app: tauri::AppHandle, s: Shared) {
         }
     }
 }
+fn apply_probe_results(
+    v: &mut View,
+    results: Vec<Probe>,
+    services: &mut connectivity::Monitor,
+    mut health: Vec<connectivity::Reading>,
+) -> (Vec<String>, Vec<String>) {
+    let settings = v.settings.clone();
+    let group_alive = |group: &str, results: &[Probe]| {
+        results.iter().any(|r| {
+            r.group == group
+                && r.ip.is_some()
+                && !settings.ignores(&format!("probe:{}", r.id))
+        })
+    };
+    let mut history_lines = vec![];
+    let mut notify_lines = vec![];
+    v.probes = results
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            let monitored = (!p.group.ends_with('6') || settings.ipv6_required)
+                && !settings.ignores(&format!("probe:{}", p.id));
+            let prior_some = p.tracker.prior_some().map(str::to_string);
+            if let Some((old, new)) = p.tracker.observe(p.ip.clone()) {
+                if monitored {
+                    match (old, new) {
+                        (Some(old_ip), Some(new_ip)) => {
+                            let line = format!("出口 IP 变化 · {}：{old_ip} → {new_ip}", p.label);
+                            history_lines.push(line.clone());
+                            record_pending_change(v, &format!("出口 IP 变化 · {}", p.label), line.clone());
+                            notify_lines.push(line);
+                        }
+                        (None, Some(new_ip)) => {
+                            resolve_pending_change(v, &format!("检测连续失败 · {}", p.label));
+                            if let Some(prev_ip) = prior_some.filter(|prev| prev != &new_ip) {
+                                let line = format!("出口 IP 变化 · {}：{prev_ip} → {new_ip}", p.label);
+                                history_lines.push(line.clone());
+                                record_pending_change(v, &format!("出口 IP 变化 · {}", p.label), line.clone());
+                                notify_lines.push(line);
+                            } else {
+                                history_lines.push(format!(
+                                    "检测恢复 · {}：不可达 → {new_ip}（IP 未变）",
+                                    p.label
+                                ));
+                            }
+                        }
+                        (Some(old_ip), None) => {
+                            let line = format!("检测连续失败 · {}：{old_ip} → 不可达", p.label);
+                            history_lines.push(line.clone());
+                            if !group_alive(&p.group, &results) {
+                                notify_lines.push(line);
+                            }
+                        }
+                        (None, None) => {}
+                    }
+                }
+            }
+            p.stable = p.tracker.settled();
+            p
+        })
+        .collect();
+    for alert in services.apply(&mut health) {
+        if settings.ignores(&format!("site:{}", alert.id)) {
+            continue;
+        }
+        let line = format!("{} · {}", alert.title, alert.detail);
+        history_lines.push(line.clone());
+        if !alert.recovered {
+            notify_lines.push(line);
+        }
+    }
+    v.service_health = health;
+    (history_lines, notify_lines)
+}
 async fn worker(app: tauri::AppHandle, s: Shared) {
     let mut services = connectivity::Monitor::default();
     let mut last_probe = Instant::now() - Duration::from_secs(3600);
@@ -791,28 +911,19 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
             Some(network) => {
                 let mut d = lock(&s);
                 if d.generation != network_generation || d.view.paused { continue; }
+                let prev = (!d.view.network.is_empty()).then(|| d.view.network.clone());
                 d.view.network = network.clone();
                 d.network_tracker
-                    .observe(Some(network))
-                    .map(|_| {
-                        d.view.unacknowledged = true;
-                        push_event(
-                            &mut d,
-                            "本机网络变化",
-                            "网络接口、局域网地址、默认路由或系统代理发生变化",
-                        );
+                    .observe(Some(network.clone()))
+                    .map(|(old, _)| {
+                        let summary = net::describe_network_change(old.as_deref().or(prev.as_deref()), &network);
+                        push_event(&mut d, "本机网络变化", &summary);
                         true
                     })
                     .unwrap_or(false)
             }
         };
         if network_change {
-            notify(
-                &app,
-                &s,
-                "本机网络发生变化",
-                "网络接口、地址、路由或系统代理已变化，正在复核各出口 IP。",
-            );
             persist(&s);
         }
         let (settings, probes, generation) = {
@@ -837,9 +948,8 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
             };
             net::run_probe(p, proxy)
         });
-        let (results, mut health) = tokio::join!(futures::future::join_all(jobs), connectivity::check_all(&settings));
-        let mut details = vec![];
-        {
+        let (results, health) = tokio::join!(futures::future::join_all(jobs), connectivity::check_all(&settings));
+        let (history_lines, notify_lines) = {
             let mut d = lock(&s);
             d.view.checking = false;
             if generation != d.generation || d.view.paused {
@@ -847,41 +957,18 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
                 refresh(&app, &s);
                 continue;
             }
-            d.view.probes = results
-                .into_iter()
-                .map(|mut p| {
-                    if let Some((old, new)) = p.tracker.observe(p.ip.clone()) {
-                        let title = if old.is_none() {
-                            "检测恢复"
-                        } else if new.is_none() {
-                            "检测连续失败"
-                        } else {
-                            "出口 IP 变化"
-                        };
-                        let detail = format!(
-                            "{}：{} → {}",
-                            p.label,
-                            old.as_deref().unwrap_or("不可达"),
-                            new.as_deref().unwrap_or("不可达")
-                        );
-                        details.push(format!("{title} · {detail}"));
-                    }
-                    p.stable = p.tracker.settled();
-                    p
-                })
-                .collect();
-            for alert in services.apply(&mut health) {
-                details.push(format!("{} · {}", alert.title, alert.detail));
-            }
-            d.view.service_health = health;
+            let (history_lines, notify_lines) =
+                apply_probe_results(&mut d.view, results, &mut services, health);
             d.view.last_check = now();
-            if !details.is_empty() {
-                d.view.unacknowledged = true;
-                push_event(&mut d, "网络与服务状态变化", &details.join("\n"));
+            if !history_lines.is_empty() {
+                push_event(&mut d, "网络与服务状态变化", &history_lines.join("\n"));
             }
+            (history_lines, notify_lines)
+        };
+        if !notify_lines.is_empty() {
+            notify(&app, &s, "出口哨兵 · 网络与服务告警", &notify_lines.join("\n"));
         }
-        if !details.is_empty() {
-            notify(&app, &s, "出口哨兵 · 网络与服务告警", &details.join("\n"));
+        if !history_lines.is_empty() {
             persist(&s);
         }
         last_probe = Instant::now();
@@ -979,6 +1066,7 @@ fn main() {
                         unacknowledged: false,
                         status: "starting".into(),
                         issues: vec![],
+                        pending_changes: vec![],
                         last_check: String::new(),
                         notification_error: None,
                         storage_error: load_error.or_else(|| {
@@ -1096,6 +1184,7 @@ mod cache_tests {
                     unacknowledged: false,
                     status: String::new(),
                     issues: vec![],
+                    pending_changes: vec![],
                     last_check: String::new(),
                     notification_error: None,
                     storage_error: None,
@@ -1288,5 +1377,75 @@ mod status_tests {
         assert_eq!(derive_status(&v), "stable");
         v.settings.ignored_checks = vec!["probe:nope".into()];
         assert!(v.settings.validate().is_err());
+    }
+
+    #[test]
+    fn single_probe_outage_and_same_ip_recovery_do_not_leave_unacknowledged_change() {
+        let mut v = View {
+            verdicts: vec![verdict(verdict::Level::Safe), verdict(verdict::Level::Safe)],
+            probes: vec![
+                probe("global-cf", "foreign", Some("1.1.1.1")),
+                probe("global-ipify", "foreign", Some("1.1.1.1")),
+            ],
+            ..Default::default()
+        };
+        let mut services = connectivity::Monitor::default();
+        // Baseline
+        let initial = v.probes.clone();
+        let (h0, n0) = apply_probe_results(&mut v, initial, &mut services, vec![]);
+        assert!(h0.is_empty() && n0.is_empty() && !v.unacknowledged);
+
+        // ipify fails twice while Cloudflare stays on 1.1.1.1
+        for _ in 0..2 {
+            let mut next = v.probes.clone();
+            next[1].ip = None;
+            next[1].error = Some("请求超时".into());
+            let (_, notify) = apply_probe_results(&mut v, next, &mut services, vec![]);
+            assert!(notify.is_empty(), "single station hiccup should not spam notification");
+        }
+        assert!(!v.unacknowledged);
+        assert_eq!(derive_status(&v), "usable");
+
+        // ipify recovers to the exact same IP 1.1.1.1
+        for _ in 0..2 {
+            let mut next = v.probes.clone();
+            next[1].ip = Some("1.1.1.1".into());
+            next[1].error = None;
+            let (_, notify) = apply_probe_results(&mut v, next, &mut services, vec![]);
+            assert!(notify.is_empty(), "same-IP recovery should not alert");
+        }
+        assert!(!v.unacknowledged && v.pending_changes.is_empty());
+        assert_eq!(derive_status(&v), "stable");
+
+        // Genuine exit IP change on Cloudflare (1.1.1.1 -> 2.2.2.2) records pending_changes
+        for _ in 0..2 {
+            let mut next = v.probes.clone();
+            next[0].ip = Some("2.2.2.2".into());
+            next[1].ip = Some("2.2.2.2".into());
+            let _ = apply_probe_results(&mut v, next, &mut services, vec![]);
+        }
+        assert!(v.unacknowledged);
+        assert_eq!(v.pending_changes.len(), 2);
+        assert!(v.pending_changes[0].contains("1.1.1.1 → 2.2.2.2"));
+        assert_eq!(derive_status(&v), "changed");
+
+        // Marking AI service safe resolves foreign IP pending changes
+        resolve_service_pending(&mut v, "claude");
+        // Note: compute_verdicts on empty View returns Unknown unless IP/node is configured, so test clear_pending_changes too
+        clear_pending_changes(&mut v);
+        assert!(!v.unacknowledged && v.pending_changes.is_empty());
+        assert_eq!(derive_status(&v), "stable");
+    }
+
+    #[test]
+    fn derive_status_reflects_risk_and_warn_verdicts() {
+        let mut v = View {
+            probes: vec![probe("global-cf", "foreign", Some("1.1.1.1"))],
+            verdicts: vec![verdict(verdict::Level::Safe), verdict(verdict::Level::Warn)],
+            ..Default::default()
+        };
+        assert_eq!(derive_status(&v), "warn");
+        v.verdicts[1].level = verdict::Level::Risk;
+        assert_eq!(derive_status(&v), "risk");
     }
 }

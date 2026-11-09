@@ -118,6 +118,8 @@ pub struct Probe {
 pub struct Tracker {
     initialized: bool,
     committed: Option<String>,
+    last_some: Option<String>,
+    prior_some: Option<String>,
     pending: Option<String>,
     count: u8,
 }
@@ -125,6 +127,9 @@ impl Tracker {
     pub fn observe(&mut self, value: Option<String>) -> Option<(Option<String>, Option<String>)> {
         if !self.initialized {
             self.initialized = true;
+            if value.is_some() {
+                self.last_some = value.clone();
+            }
             self.committed = value;
             return None;
         }
@@ -143,6 +148,10 @@ impl Tracker {
             return None;
         }
         let old = self.committed.clone();
+        self.prior_some = self.last_some.clone();
+        if value.is_some() {
+            self.last_some = value.clone();
+        }
         self.committed = value.clone();
         self.pending = None;
         self.count = 0;
@@ -150,6 +159,10 @@ impl Tracker {
     }
     pub fn settled(&self) -> bool {
         self.count == 0
+    }
+    /// Last committed non-None value before the latest transition (preserved across outages).
+    pub fn prior_some(&self) -> Option<&str> {
+        self.prior_some.as_deref()
     }
 }
 
@@ -260,6 +273,7 @@ mod tests {
             a.observe(Some("9.9.9.9".into())),
             Some((None, Some("9.9.9.9".into())))
         );
+        assert_eq!(a.prior_some(), Some("1.1.1.1"));
         assert!(b.observe(Some("8.8.8.8".into())).is_none());
     }
     #[test]
