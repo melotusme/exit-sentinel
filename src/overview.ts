@@ -2,7 +2,7 @@
 import './overview.css';
 import { ListView } from './list';
 import { ago, esc, icon, safetyText, time, titles } from './ui';
-import type { Json, Probe, Verdict, View } from './types';
+import type { Json, Probe, Uplink, Verdict, View } from './types';
 
 export const geoCache = new Map<string, Json>();
 export const series = new Map<string, { time: string; values: number[] }>();
@@ -138,6 +138,26 @@ function exitTile(v: View, group: string, title: string) {
   </article>`;
 }
 
+const isMac = /Mac/i.test(navigator.userAgent);
+
+/** Wired / Wi-Fi (with its name) under the default route, looked through any TUN / VPN. */
+export function uplinkChip(u: Uplink | undefined, network: string): string {
+  if (!u || (!u.interface && !network)) return '<span class="uplink-chip muted">出口链路读取中…</span>';
+  if (!u.interface) return '<span class="uplink-chip">出口链路：未连接</span>';
+  const device = u.port && u.port !== u.interface ? `${u.port}（${u.interface}）` : u.interface;
+  if (u.medium === 'wired') {
+    return `<span class="uplink-chip wired" title="${esc(device)}"><strong>有线</strong>${esc(device)}</span>`;
+  }
+  if (u.medium === 'wireless') {
+    const name = u.ssid
+      ? `<strong>无线</strong><span class="mono">${esc(u.ssid)}</span>`
+      : `<strong>无线</strong><span class="muted">${esc(u.ssid_hint || 'Wi-Fi 名称未知')}</span>`;
+    const ask = !u.ssid && isMac ? '<button type="button" class="text-button compact" id="wifi-name-permission">允许读取 Wi-Fi 名称</button>' : '';
+    return `<span class="uplink-chip wireless" title="${esc(device)}">${name}</span>${ask}`;
+  }
+  return `<span class="uplink-chip"><strong>未知类型</strong>${esc(device)}</span>`;
+}
+
 function chart(p: Probe) {
   const vals = series.get(p.id)?.values || [];
   if (vals.length < 2) return '<span class="muted small">采样积累中…</span>';
@@ -164,7 +184,8 @@ export function probeRow(p: Probe) {
 function googleHealth(v: View) {
   const r = v.service_health?.find(h => h.id === 'google');
   if (v.paused || !r) return '';
-  return `<span class="pill ${r.status === 'reachable' ? 'ok' : ''}">Google · ${healthText[r.status]}${r.stable ? '' : ' · 复核中'}</span>`;
+  const region = v.gemini?.country ? ` · 出口地区 ${esc(v.verdicts.find(x => x.service === 'gemini')?.region_label || v.gemini.country)}` : '';
+  return `<span class="pill ${r.status === 'reachable' ? 'ok' : ''}">Google · ${healthText[r.status]}${r.stable ? '' : ' · 复核中'}${region}</span>`;
 }
 
 export function renderOverview(v: View): string {
@@ -203,7 +224,7 @@ export function renderOverview(v: View): string {
     <div class="verdict-grid">${v.verdicts.map(x => verdictCard(v, x)).join('')}</div>
     <p class="small muted">结论来自你登记的 IP / 节点状态；Gemini 另看 Google 判定的地区，判成中国时直接显示有风险。Claude 的 IP 是本应用经同一路径访问 claude.ai 看到的出口，不代表账号状态。</p>
 
-    <div class="section-head"><h2>网络出口</h2></div>
+    <div class="section-head"><h2>网络出口</h2>${uplinkChip(v.uplink, v.network)}</div>
     <div class="exit-tiles">
       ${exitTile(v, 'domestic', '国内 IPv4')}
       ${exitTile(v, 'foreign', '国外 IPv4')}

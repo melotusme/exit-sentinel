@@ -1,6 +1,6 @@
 [package]
 name = "exit-sentinel"
-version = "0.6.2"
+version = "0.7.0"
 description = "A private macOS, Windows and Linux split-route egress monitor"
 edition = "2021"
 
@@ -31,3 +31,12 @@ sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 flate2 = "1"
+
+# macOS: tray right-click handling (AppKit) and the Wi-Fi name (CoreWLAN, gated by Location Services).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSString", "NSNotification", "NSOperation", "NSTimer", "NSRunLoop", "NSDate", "NSObjCRuntime"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSResponder"] }
+objc2-core-wlan = { version = "0.3", default-features = false, features = ["std", "CWWiFiClient", "CWInterface"] }
+objc2-core-location = { version = "0.3", default-features = false, features = ["std", "CLLocationManager"] }

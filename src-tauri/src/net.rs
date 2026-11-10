@@ -286,11 +286,15 @@ pub fn describe_network_change(old: Option<&str>, new: &str) -> String {
     let Some(old) = old else {
         return "本机网络已初始化".into();
     };
-    let split = |s: &str| -> [String; 4] {
-        let mut parts = [String::new(), String::new(), String::new(), String::new()];
+    let split = |s: &str| -> [String; 5] {
+        let mut parts: [String; 5] = Default::default();
         let mut idx = 0usize;
         for line in s.lines() {
-            if line.contains("IPv4 默认路由") || line.contains("Windows IPv4 路由") {
+            if line == "出口链路" {
+                idx = 4;
+            } else if idx == 4 && line.trim().is_empty() {
+                idx = 0;
+            } else if line.contains("IPv4 默认路由") || line.contains("Windows IPv4 路由") {
                 idx = 1;
             } else if line.contains("IPv6 默认路由") || line.contains("Windows IPv6 路由") {
                 idx = 2;
@@ -306,7 +310,11 @@ pub fn describe_network_change(old: Option<&str>, new: &str) -> String {
     let a = split(old);
     let b = split(new);
     let labels = ["局域网接口 / 地址", "IPv4 默认路由", "IPv6 默认路由", "系统代理"];
-    let changed: Vec<&str> = (0..4).filter(|&i| a[i] != b[i]).map(|i| labels[i]).collect();
+    let mut changed: Vec<String> = (0..4).filter(|&i| a[i] != b[i]).map(|i| labels[i].to_string()).collect();
+    if a[4] != b[4] {
+        let link = |p: &str| p.trim().to_string();
+        changed.insert(0, if a[4].is_empty() { format!("出口链路（{}）", link(&b[4])) } else { format!("出口链路（{} → {}）", link(&a[4]), link(&b[4])) });
+    }
     if changed.is_empty() {
         "本机网络状态更新".into()
     } else {
@@ -608,5 +616,12 @@ mod env_proxy_tests {
         let a = "局域网接口 / 地址\nen0 192.168.1.2\nIPv4 默认路由\ngateway: 192.168.1.1\nIPv6 默认路由\nnone\n系统代理（仅展示，不执行 PAC）\nHTTPEnable : 0";
         let b = "局域网接口 / 地址\nen0 192.168.1.2\nIPv4 默认路由\ngateway: 192.168.1.1\nIPv6 默认路由\nnone\n系统代理（仅展示，不执行 PAC）\nHTTPEnable : 1";
         assert_eq!(super::describe_network_change(Some(a), b), "变化项：系统代理");
+    }
+
+    #[test]
+    fn link_switch_names_both_sides_and_ignores_unchanged_sections() {
+        let wired = "出口链路\n有线 · USB LAN\n\n局域网接口 / 地址\nen6\nIPv4 默认路由\ngateway: 10.0.0.1";
+        let wifi = "出口链路\n无线 · Home\n\n局域网接口 / 地址\nen6\nIPv4 默认路由\ngateway: 10.0.0.1";
+        assert_eq!(super::describe_network_change(Some(wired), wifi), "变化项：出口链路（有线 · USB LAN → 无线 · Home）");
     }
 }

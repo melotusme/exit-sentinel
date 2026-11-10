@@ -188,3 +188,20 @@
 .near-reason.tier-region { color: var(--primary); background: var(--primary-tonal); border-color: transparent; }
 .near-status { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .near-row .record-main { gap: 6px; }
+
+.section-head:has(.uplink-chip) { align-items: center; justify-content: flex-start; flex-wrap: wrap; }
+.uplink-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.uplink-chip strong { color: var(--text); font-weight: 600; }
+.uplink-chip.wireless strong, .uplink-chip.wired strong { color: var(--primary); }

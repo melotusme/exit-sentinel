@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSLocationUsageDescription</key>
+  <string>macOS 只有在获得定位权限后才允许应用读取当前 Wi-Fi 名称。出口哨兵只用它显示当前连接的 Wi-Fi，不读取也不保存你的位置。</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>macOS 只有在获得定位权限后才允许应用读取当前 Wi-Fi 名称。出口哨兵只用它显示当前连接的 Wi-Fi，不读取也不保存你的位置。</string>
+</dict>
+</plist>

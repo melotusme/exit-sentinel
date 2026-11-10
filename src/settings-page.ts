@@ -6,6 +6,7 @@ import { renderGuide } from './guide';
 import { loadSync, syncSettings } from './sync';
 import { updateSettings } from './updater';
 import { esc } from './ui';
+import { ListView } from './list';
 import type { Settings } from './types';
 
 export interface SettingsDeps {
@@ -30,14 +31,42 @@ const IGNORABLE: [string, string][] = [
   ['probe:cn-v6', '国内 · IPv6'],
   ['probe:global-v6', '国外 · IPv6'],
 ];
-const ignoredChecks = (s: Settings) => `
-  <div class="field field-full">
+interface IgnorableCheck { id: string; name: string; kind: string }
+const kindOf = (id: string) => id.startsWith('site:') ? 'site' : id.startsWith('probe:cn-') ? 'domestic' : 'foreign';
+const KINDS: Record<string, string> = { site: '网站访问', domestic: '国内出口', foreign: '国外出口' };
+const CHECKS: IgnorableCheck[] = IGNORABLE.map(([id, name]) => ({ id, name, kind: kindOf(id) }));
+/** Ticked items not yet saved. Kept outside the DOM so paging and filtering keep them. */
+let ignoredDraft = new Set<string>();
+export const ignoreList = new ListView<IgnorableCheck>(
+  'ignored-checks',
+  {
+    name: { label: '检测项', value: r => r.name },
+    kind: { label: '类别', value: r => KINDS[r.kind] },
+    state: { label: '状态', value: r => (ignoredDraft.has(r.id) ? '1' : '0') },
+  },
+  r => `${r.name} ${KINDS[r.kind]} ${ignoredDraft.has(r.id) ? '已忽略' : '计入状态'}`,
+  r => r.kind,
+  KINDS
+);
+const ignoreRow = (r: IgnorableCheck) => {
+  const on = ignoredDraft.has(r.id);
+  return `<label class="ignore-row ${on ? 'is-ignored' : ''}">
+    <input type="checkbox" name="ignored_checks" value="${esc(r.id)}" ${on ? 'checked' : ''}>
+    <span class="ignore-name">${esc(r.name)}</span>
+    <span class="ignore-kind">${esc(KINDS[r.kind])}</span>
+    <span class="ignore-state">${on ? '已忽略' : '计入状态'}</span>
+  </label>`;
+};
+export const renderIgnoreList = () => ignoreList.render(CHECKS, ignoreRow);
+const ignoredChecks = (s: Settings) => {
+  ignoredDraft = new Set(s.ignored_checks || []);
+  return `
+  <div class="field field-full ignore-field">
     <span>忽略的检测项</span>
-    <div class="ignore-grid">
-      ${IGNORABLE.map(([id, name]) => `<label class="ignore-item"><input type="checkbox" name="ignored_checks" value="${id}" ${(s.ignored_checks || []).includes(id) ? 'checked' : ''}> ${esc(name)}</label>`).join('')}
-    </div>
     <small>勾选的项目照常检测和显示，但不再让菜单栏变成“部分检测异常”。只保存在本机。</small>
+    <div class="ignore-list panel">${renderIgnoreList()}</div>
   </div>`;
+};
 let auto: boolean | null = null,
   autoBusy = false,
   settingsSaving = false;
@@ -185,6 +214,23 @@ export async function syncAutostart() {
   }
 }
 
+document.addEventListener('change', event => {
+  const input = event.target as HTMLInputElement;
+  if (input.name !== 'ignored_checks') return;
+  if (input.checked) ignoredDraft.add(input.value);
+  else ignoredDraft.delete(input.value);
+  const row = input.closest('.ignore-row');
+  row?.classList.toggle('is-ignored', input.checked);
+  const state = row?.querySelector('.ignore-state');
+  if (state) state.textContent = input.checked ? '已忽略' : '计入状态';
+});
+
+// Enter in the list's keyword box filters; it must not submit the settings form.
+document.addEventListener('keydown', event => {
+  const input = event.target as HTMLElement;
+  if (event.key === 'Enter' && input.matches('#settings-form [data-list-action]')) event.preventDefault();
+});
+
 document.addEventListener('change', async event => {
   const input = event.target as HTMLInputElement;
   if (input.name !== 'autostart' || autoBusy) return;
@@ -236,7 +282,7 @@ document.addEventListener('submit', async event => {
       ipv6_required: f.has('ipv6_required'),
       domestic_proxy: String(f.get('domestic_proxy') || '').trim(),
       foreign_proxy: String(f.get('foreign_proxy') || '').trim(),
-      ignored_checks: f.getAll('ignored_checks').map(String),
+      ignored_checks: IGNORABLE.map(([id]) => id).filter(id => ignoredDraft.has(id)),
     };
     if (!s.retain_history && deps.settings().retain_history && deps.historyCount() &&
         !await confirmAction({ title: '停止保存并清空变化记录？', message: `已有的 ${deps.historyCount()} 条变化记录将删除，之后不再保存新记录。`, confirm: '清空并保存设置', danger: true })) return;

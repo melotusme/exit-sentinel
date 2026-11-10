@@ -8,6 +8,7 @@ mod exit_worker;
 mod google;
 mod intelligence;
 mod legacy_data;
+mod link;
 mod local_proxy;
 mod model;
 mod net;
@@ -18,6 +19,8 @@ mod shadowrocket;
 mod sync;
 mod tray;
 mod tray_menu;
+#[cfg(target_os = "macos")]
+mod tray_right_click;
 mod updates;
 mod verdict;
 use ai::compute_verdicts;
@@ -54,6 +57,8 @@ struct View {
     service_health: Vec<connectivity::Reading>,
     history: Vec<Event>,
     network: String,
+    /// Physical link under the default route: wired / Wi-Fi (with its name).
+    uplink: link::Uplink,
     paused: bool,
     checking: bool,
     unacknowledged: bool,
@@ -365,8 +370,9 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         )
     };
     let signature = format!(
-        "{}:{:?}:{:?}:{}:{}:{}:{:?}",
+        "{}:{}:{:?}:{:?}:{}:{}:{}:{:?}",
         v.status,
+        v.uplink.label(),
         v.issues,
         v.pending_changes,
         v.paused,
@@ -377,7 +383,8 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
             .map(|p| (&p.group, &p.ip, &p.checked, &p.error))
             .collect::<Vec<_>>()
     ) + &format!(
-        "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{}:{}",
+        "{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{}:{}",
+        v.gemini.country,
         geodata,
         nearbydata,
         autostart,
@@ -526,6 +533,19 @@ fn check_now(s: tauri::State<Shared>) {
 fn acknowledge(app: tauri::AppHandle, s: tauri::State<Shared>) {
     clear_pending_changes(&mut lock(&s).view);
     refresh(&app, &s);
+}
+/// Ask macOS for the location permission that unlocks the Wi-Fi name. Returns
+/// "requested", "denied" or "granted".
+#[tauri::command]
+async fn request_wifi_name(app: tauri::AppHandle, s: tauri::State<'_, Shared>) -> Result<String, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(link::request_wifi_name_permission());
+    })
+    .map_err(|e| e.to_string())?;
+    let result = rx.await.map_err(|e| e.to_string())?;
+    s.wake.notify_one();
+    Ok(result.into())
 }
 #[tauri::command]
 fn set_paused(paused: bool, app: tauri::AppHandle, s: tauri::State<Shared>) {
@@ -898,21 +918,24 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
             .await
             .unwrap_or_default();
         let network = if sampler.full_due(&quick, force) {
-            let full = tokio::task::spawn_blocking(net::network_snapshot)
+            let (full, uplink) = tokio::task::spawn_blocking(|| (net::network_snapshot(), link::current()))
                 .await
                 .unwrap_or_default();
+            // The Wi-Fi name is part of the snapshot so switching networks is recorded.
+            let full = format!("出口链路\n{}\n\n{full}", uplink.label());
             sampler.record_full(&full);
-            Some(full)
+            Some((full, uplink))
         } else {
             None
         };
         let network_change = match network {
             None => false,
-            Some(network) => {
+            Some((network, uplink)) => {
                 let mut d = lock(&s);
                 if d.generation != network_generation || d.view.paused { continue; }
                 let prev = (!d.view.network.is_empty()).then(|| d.view.network.clone());
                 d.view.network = network.clone();
+                d.view.uplink = uplink;
                 d.network_tracker
                     .observe(Some(network.clone()))
                     .map(|(old, _)| {
@@ -1061,6 +1084,7 @@ fn main() {
                         settings: saved.settings,
                         history: saved.history,
                         network: String::new(),
+                        uplink: link::Uplink::default(),
                         paused: saved.paused,
                         checking: false,
                         unacknowledged: false,
@@ -1089,6 +1113,12 @@ fn main() {
                 .tooltip("出口哨兵 · 等待检测")
                 .on_menu_event(tray_menu::on_event)
                 .build(app)?;
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                let shared = s.clone();
+                tray_right_click::install(move || tray_menu::acknowledge_from_tray(&handle, &shared));
+            }
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             if !std::env::args().any(|arg| arg == "--autostart") {
@@ -1123,6 +1153,7 @@ fn main() {
             set_autostart,
             check_now,
             acknowledge,
+            request_wifi_name,
             set_paused,
             save_settings,
             clear_history,
@@ -1179,6 +1210,7 @@ mod cache_tests {
                     service_health: vec![],
                     history: saved.history,
                     network: String::new(),
+                    uplink: link::Uplink::default(),
                     paused: false,
                     checking: false,
                     unacknowledged: false,

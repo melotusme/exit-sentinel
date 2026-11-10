@@ -102,6 +102,7 @@ export interface View {
   service_health: { id: string; name: string; status: 'reachable' | 'restricted' | 'unreachable'; confirmed: string | null; stable: boolean; checked: string; http_code: number | null; latency: number; detail: string }[];
   history: Event[];
   network: string;
+  uplink: Uplink;
   paused: boolean;
   checking: boolean;
   unacknowledged: boolean;
@@ -111,6 +112,14 @@ export interface View {
   last_check: string;
   notification_error: string | null;
   storage_error: string | null;
+}
+
+export interface Uplink {
+  medium: 'wired' | 'wireless' | 'unknown';
+  interface: string;
+  port: string;
+  ssid: string;
+  ssid_hint: string;
 }
 
 export type Safety = 'pending' | 'safe' | 'risk';

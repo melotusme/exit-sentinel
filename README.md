@@ -107,12 +107,15 @@ Gemini 的地区受限指 Google 返回 `CHN`、`HKG` 或 `MAC`；其他服务�
 | 按需并发检测 | [`main.rs`](src-tauri/src/main.rs) 的 `worker` 根据周期、网络变化或手动刷新触发，并发执行出口与服务连通性检测。配置代次校验会丢弃已过时的请求结果。 |
 | 观测 AI 实际路径 | [`exit_worker.rs`](src-tauri/src/exit_worker.rs) 独立复核 Claude trace、Gemini 的 Google 地区与 STUN / 参考出口；[`shadowrocket.rs`](src-tauri/src/shadowrocket.rs) 和 [`clash_verge.rs`](src-tauri/src/clash_verge.rs) 提供节点快照，保留取证来源。 |
 | 给出保守判定 | [`verdict.rs`](src-tauri/src/verdict.rs) 合成当前出口、IP / 节点人工标记、连通性和地区证据。风险优先；有当前 IP 时以 IP 标记判断可用性，否则才参考节点标记。Gemini 还检查 Google 地区。 |
+| 出口链路 | [`link.rs`](src-tauri/src/link.rs) 按系统读取默认路由下的物理网卡（macOS `scutil` / `networksetup` / `ipconfig` 与 CoreWLAN，Linux sysfs 与 nmcli，Windows `Get-NetAdapter` 与 netsh），判断有线 / 无线和 Wi-Fi 名称。 |
 | 托盘、界面与通知 | Rust 维护共享状态并更新托盘，通过 `monitor-state` 事件驱动 [`src/main.ts`](src/main.ts) 的 TypeScript 界面；变化记录本地保存，并按监控规则发送本机通知。 |
 | 辅助诊断与跨设备配置 | [`diagnostics.rs`](src-tauri/src/diagnostics.rs) 提供 curl 请求与阶段耗时；[`sync.rs`](src-tauri/src/sync.rs) 手动同步 WebDAV 配置；[`updates.rs`](src-tauri/src/updates.rs) 检查公开 Release，更新包由 Tauri 校验签名。 |
 
 ## 功能
 
 - 国内 / 国外 IPv4、IPv6 检测站独立监控；可设置是否要求 IPv6 可用。
+- 显示当前出口链路是有线还是无线（无线时显示 Wi-Fi 名称），穿过 TUN / VPN 虚拟网卡找到真实网卡；链路切换记入变化记录。macOS 读取 Wi-Fi 名称需要授予定位权限，应用不读取位置。
+- macOS 托盘菜单展开时，在菜单内右键即可确认已知变化。
 - IP 位置、ASN、运营商及保守网络类型参考，地理信息本地缓存。
 - 美国出口显示是否为无州级销售税州；阿拉斯加额外提示地方销售税。参见 [销售税规则](docs/SALES-TAX.md)。
 - 概览页给出 Claude / Gemini 当前判定（可以使用 / 需要确认 / 有风险），由当前出口 IP、当前节点的人工状态和连通性合成，可一键标记。

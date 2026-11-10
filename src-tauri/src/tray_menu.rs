@@ -255,6 +255,7 @@ pub fn build(
     )?;
     let menu = Menu::new(app)?;
     menu.append(&status)?;
+    menu.append(&MenuItem::with_id(app, "uplink", uplink_title(v), false, None::<&str>)?)?;
     if v.unacknowledged {
         let changes: Vec<String> = if !v.pending_changes.is_empty() {
             v.pending_changes.clone()
@@ -274,7 +275,13 @@ pub fn build(
                 None::<&str>,
             )?)?;
         }
-        menu.append(&MenuItem::with_id(app, "ack", "✓ 确认已知变化", true, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            "ack",
+            if cfg!(target_os = "macos") { "✓ 确认已知变化（菜单内右键也可确认）" } else { "✓ 确认已知变化" },
+            true,
+            None::<&str>,
+        )?)?;
     }
     for (i, issue) in v.issues.iter().enumerate() {
         menu.append(&MenuItem::with_id(app, format!("issue:{i}"), format!("　· {issue}"), false, None::<&str>)?)?;
@@ -321,10 +328,11 @@ pub fn build(
                 .iter()
                 .find(|r| r.id == id)
                 .map(|r| {
-                    if r.detail.is_empty() {
+                    let detail = site_detail(&r.detail, id, &v.gemini);
+                    if detail.is_empty() {
                         r.summary()
                     } else {
-                        format!("{}（{}）", r.summary(), r.detail)
+                        format!("{}（{}）", r.summary(), detail)
                     }
                 })
                 .unwrap_or_else(|| format!("{name} · 等待检测"))
@@ -361,6 +369,43 @@ pub fn build(
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&quit)?;
     Ok(menu)
+}
+
+/// Google and Gemini share one exit judgement: the country Google assigns on the Gemini path.
+/// Claude's detail already carries the Cloudflare trace location.
+pub fn site_detail(detail: &str, id: &str, gemini: &crate::claude::Monitor) -> String {
+    if id != "google" && id != "gemini" {
+        return detail.to_string();
+    }
+    let region = if !gemini.country.is_empty() {
+        format!("出口地区 {}", crate::google::country_name(&gemini.country))
+    } else if gemini.country_error.is_some() {
+        "出口地区未读取到".to_string()
+    } else {
+        return detail.to_string();
+    };
+    if detail.is_empty() { region } else { format!("{detail} · {region}") }
+}
+
+/// "出口链路 · 有线 · USB LAN" / "出口链路 · 无线 · HomeWiFi".
+pub fn uplink_title(v: &View) -> String {
+    if v.uplink.interface.is_empty() && v.network.is_empty() {
+        return "出口链路 · 读取中…".into();
+    }
+    format!("出口链路 · {}", v.uplink.label())
+}
+
+/// Right click on the open tray menu (macOS). Same as "确认已知变化"; no-op when nothing is pending.
+#[cfg(target_os = "macos")]
+pub fn acknowledge_from_tray(app: &tauri::AppHandle, s: &Shared) {
+    {
+        let mut d = lock(s);
+        if !d.view.unacknowledged {
+            return;
+        }
+        crate::clear_pending_changes(&mut d.view);
+    }
+    refresh(app, s);
 }
 
 fn level_mark(level: verdict::Level) -> &'static str {
@@ -454,6 +499,11 @@ fn ai_service_menu(
 
 /// Tray menu clicks. Item ids are built in `build` and `ai_service_menu`.
 pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
+    // A right click that closed the menu may also land on the item under the pointer.
+    #[cfg(target_os = "macos")]
+    if crate::tray_right_click::swallow_item_event() {
+        return;
+    }
     let s = app.state::<Shared>();
     if let Some(id) = event.id.as_ref().strip_prefix("ai-node-mark:") {
         let parts: Vec<_> = id.splitn(3, ':').map(String::from).collect();
@@ -571,5 +621,23 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
         "quit" => app.exit(0),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::site_detail;
+
+    #[test]
+    fn google_and_gemini_show_google_assigned_region() {
+        let mut m = crate::claude::Monitor::default();
+        assert_eq!(site_detail("HTTP 200", "google", &m), "HTTP 200");
+        m.country = "USA".into();
+        assert_eq!(site_detail("HTTP 200", "google", &m), "HTTP 200 · 出口地区 美国");
+        assert_eq!(site_detail("HTTP 200", "gemini", &m), "HTTP 200 · 出口地区 美国");
+        assert_eq!(site_detail("HTTP 200 · 出口地区 US", "claude", &m), "HTTP 200 · 出口地区 US");
+        m.country.clear();
+        m.country_error = Some("超时".into());
+        assert_eq!(site_detail("HTTP 200", "gemini", &m), "HTTP 200 · 出口地区未读取到");
     }
 }

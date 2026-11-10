@@ -16,7 +16,7 @@ import {
   aiList, nodeList, routeList, routeRow, renderIpRecords, renderNodeRecords, populateNodeChoices,
   captureDrafts, restoreDrafts, clearDrafts, fillIp, fillNode, ipRecordRow, nodeRecordRow,
 } from './records';
-import { initSettings, permission, renderSettings, setAutostart, settingsBusy, syncAutostart } from './settings-page';
+import { ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart } from './settings-page';
 import { initIpDetails, loadPlaces, showDetails } from './ip-details';
 import { findNear, nearList, renderNearList, renderNodeFinder } from './node-finder';
 import {
@@ -396,6 +396,14 @@ document.addEventListener('click', async event => {
       toast('已恢复自动节点识别，正在读取实际连接记录。');
       return;
     }
+    if (b.id === 'wifi-name-permission') {
+      const result = await invoke<string>('request_wifi_name');
+      toast(result === 'denied'
+        ? '定位权限已被拒绝。请到 系统设置 → 隐私与安全性 → 定位服务 中允许 Exit Sentinel，用于读取 Wi-Fi 名称。'
+        : result === 'requested' ? '已请求定位权限。允许后会自动显示 Wi-Fi 名称；出口哨兵不读取你的位置。'
+          : '已有定位权限，正在重新读取 Wi-Fi 名称…', result === 'denied');
+      return;
+    }
     if (b.id === 'theme-toggle') {
       applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
       return;
@@ -407,9 +415,13 @@ document.addEventListener('click', async event => {
     if (b.dataset.listPage && list) {
       const l = listFor(list.dataset.list).list;
       l.page = Number(b.dataset.listPage);
-      if (list.dataset.list === 'ip-routes') {
-        list.outerHTML = routeList.render(routeRows, routeRow);
-        document.querySelector<HTMLButtonElement>('[data-list="ip-routes"] [data-list-page]:not(:disabled)')?.focus();
+      if (list.dataset.list === 'ip-routes' || list.dataset.list === 'ignored-checks') {
+        // Re-render only this list: a full render would drop unsaved settings input.
+        const id = list.dataset.list;
+        list.outerHTML = listFor(id).html();
+        const fresh = document.querySelector<HTMLElement>(`[data-list="${id}"]`);
+        if (fresh) refreshSearchSelects(fresh);
+        fresh?.querySelector<HTMLButtonElement>('[data-list-page]:not(:disabled)')?.focus();
       } else {
         render();
         document.querySelector<HTMLButtonElement>(`[data-list="${CSS.escape(l.id)}"] [data-list-page]:not(:disabled)`)?.focus();
@@ -533,6 +545,7 @@ function listFor(id: string | undefined): { list: { id: string; page: number; ch
     case 'probes': return { list: probeList, html: () => probeList.render(state!.probes, probeRow) };
     case 'ip-routes': return { list: routeList, html: () => routeList.render(routeRows, routeRow) };
     case 'near-nodes': return { list: nearList, html: renderNearList };
+    case 'ignored-checks': return { list: ignoreList, html: renderIgnoreList };
     default: return { list: historyList, html: () => historyList.render(state!.history, historyRow) };
   }
 }
@@ -553,7 +566,7 @@ function listInput(event: globalThis.Event) {
 document.addEventListener('input', e => {
   const field = e.target as HTMLInputElement;
   const form = field.closest<HTMLFormElement>('#settings-form');
-  if (form && field.name !== 'autostart') form.dataset.dirty = 'true';
+  if (form && field.name !== 'autostart' && !field.dataset.listAction) form.dataset.dirty = 'true';
   if ((e.target as HTMLElement).dataset.listAction === 'query' && !(e as InputEvent).isComposing) listInput(e);
 });
 document.addEventListener('compositionend', e => {
@@ -562,7 +575,7 @@ document.addEventListener('compositionend', e => {
 document.addEventListener('change', e => {
   const field = e.target as HTMLInputElement;
   const form = field.closest<HTMLFormElement>('#settings-form');
-  if (form && field.name !== 'autostart') form.dataset.dirty = 'true';
+  if (form && field.name !== 'autostart' && !field.dataset.listAction) form.dataset.dirty = 'true';
   if ((e.target as HTMLElement).dataset.listAction && (e.target as HTMLElement).dataset.listAction !== 'query') listInput(e);
 });
 
