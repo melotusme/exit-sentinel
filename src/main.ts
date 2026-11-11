@@ -9,14 +9,14 @@ import { ListView } from './list';
 import { proxyDataSettings, initProxyData, resetProxyDataUi, loadLocalProxyClients, proxyDataInProgress, updateProxyDataState } from './proxy-data';
 import { confirmAction } from './confirm';
 import { initSearchSelects, refreshSearchSelects, setSelectValue } from './select';
-import { icon, esc, time, titles } from './ui';
+import { icon, esc, time, titles, safetyText } from './ui';
 import type { Event, RouteSnapshot, IpRecord, View, Json } from './types';
 import { geoCache, probeList, probeRow, recordSeries, renderOverview, series } from './overview';
 import {
   aiList, nodeList, routeList, routeRow, renderIpRecords, renderNodeRecords, populateNodeChoices,
   captureDrafts, restoreDrafts, clearDrafts, fillIp, fillNode, ipRecordRow, nodeRecordRow,
 } from './records';
-import { ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart } from './settings-page';
+import { ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart, paintSettingsDraft } from './settings-page';
 import { initIpDetails, loadPlaces, showDetails, openIpLookup } from './ip-details';
 import { findNear, nearList, renderNearList, renderNodeFinder } from './node-finder';
 import {
@@ -155,7 +155,7 @@ document.querySelector('#app')!.innerHTML = `
           ${icon('theme')}
           <span class="theme-label">${getTheme() === 'dark' ? '浅色' : '深色'}</span>
         </button>
-        <button id="check" class="primary" type="button">${icon('refresh')}<span>立即检测</span></button>
+        <button id="check" class="primary" type="button" title="刷新出口 IP 与网站连通性">${icon('refresh')}<span>刷新网络状态</span></button>
       </div>
     </header>
     <div id="pause-banner" class="pause-banner" role="status" hidden>
@@ -168,12 +168,21 @@ document.querySelector('#app')!.innerHTML = `
   <dialog id="route-details" class="route-dialog" aria-label="关联的节点记录"><div id="route-content"></div></dialog>
   <dialog id="details" aria-label="IP 位置与网络详情"><div id="detail-content"></div></dialog>
   <div id="toast" role="status" aria-live="polite"></div>
+  <div id="mark-feedback" class="mark-feedback" hidden><span role="status" id="mark-message"></span><button type="button" id="undo-mark">撤销标记</button><button type="button" id="dismiss-mark">关闭</button></div>
   <div id="error-notice" role="alert" hidden><span id="error-message"></span><button type="button" id="dismiss-error">关闭提示</button></div>`;
 
 const content = document.querySelector<HTMLElement>('#content')!;
 const dialog = document.querySelector<HTMLDialogElement>('#details')!;
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let undoMark: (() => Promise<void>) | undefined;
+let marking = false;
+function offerMarkUndo(message: string, action: () => Promise<void>, previouslyRegistered: boolean) {
+  undoMark = action;
+  document.querySelector('#mark-message')!.textContent = message;
+  document.querySelector('#undo-mark')!.textContent = previouslyRegistered ? '撤销标记' : '撤回至待确认';
+  document.querySelector<HTMLElement>('#mark-feedback')!.hidden = false;
+}
 function toast(message: string, persistent = false) {
   if (persistent) {
     document.querySelector('#error-message')!.textContent = message;
@@ -321,7 +330,7 @@ function paintChrome() {
   const v = state;
   if (!v) return;
   check.disabled = v.checking || v.paused;
-  check.innerHTML = `${icon('refresh')}<span>${v.checking ? '检测中…' : '立即检测'}</span>`;
+  check.innerHTML = `${icon('refresh')}<span>${v.checking ? '正在刷新…' : '刷新网络状态'}</span>`;
   document.querySelector('#event-count')!.textContent = String(v.history.length);
   document.querySelector('#ai-count')!.textContent = String(v.claude_ips.length + v.ai_nodes.length);
   const worst = v.verdicts.some(x => x.level === 'risk') ? 'risk' : v.verdicts.some(x => x.level === 'warn') ? 'warn' : '';
@@ -390,6 +399,44 @@ document.addEventListener('click', async event => {
   const b = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
   if (!b || b.disabled) return;
   try {
+    if (b.id === 'dismiss-mark') {
+      undoMark = undefined;
+      document.querySelector<HTMLElement>('#mark-feedback')!.hidden = true;
+      document.querySelector<HTMLElement>('#page-title')?.focus({ preventScroll: true });
+      return;
+    }
+    if (b.id === 'undo-mark') {
+      if (!undoMark || marking) return;
+      marking = true;
+      b.disabled = true;
+      try {
+        await undoMark();
+        undoMark = undefined;
+        document.querySelector<HTMLElement>('#mark-feedback')!.hidden = true;
+        toast('人工标记已恢复');
+        document.querySelector<HTMLElement>('#page-title')?.focus({ preventScroll: true });
+      } finally { marking = false; b.disabled = false; }
+      return;
+    }
+    if (b.dataset.settingsSection) {
+      await switchTab('settings');
+      if (tab === 'settings') {
+        const target = document.getElementById(b.dataset.settingsSection);
+        target?.scrollIntoView({ block: 'start' });
+        target?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (b.id === 'show-probes') {
+      const panel = content.querySelector<HTMLDetailsElement>('.probe-panel');
+      if (panel) { panel.open = true; panel.scrollIntoView({ block: 'start' }); panel.querySelector('summary')?.focus(); }
+      return;
+    }
+    if (b.dataset.testService) {
+      await call('test_ai_services', { service: b.dataset.testService });
+      toast(`${b.dataset.testService === 'claude' ? 'Claude' : 'Gemini'} 深入测试完成`);
+      return;
+    }
     if (b.id === 'enable-auto-nodes') {
       b.disabled = true;
       await invoke('save_settings', { settings: { ...state!.settings, manual_nodes_only: false } });
@@ -434,18 +481,41 @@ document.addEventListener('click', async event => {
       return;
     }
     if (b.dataset.markIp !== undefined && b.dataset.service) {
+      if (marking) return;
       const { service, status, markIp: ip } = b.dataset;
-      const note = state?.claude_ips.find(r => r.service === service && r.ip === ip)?.note || '';
-      await call('save_claude_ip', { service, ip, status, note, attachCurrent: false });
-      toast(`${service === 'claude' ? 'Claude' : 'Gemini'} · ${ip} 已标为${status === 'safe' ? '可用' : '风险'}`);
+      const previous = state?.claude_ips.find(r => r.service === service && r.ip === ip);
+      if (previous?.status === status) return;
+      const note = previous?.note || '';
+      marking = true;
+      try {
+        await call('save_claude_ip', { service, ip, status, note, attachCurrent: false });
+        offerMarkUndo(`${service === 'claude' ? 'Claude' : 'Gemini'} · IP 已人工标记为${safetyText(status)}`, async () => {
+          const latest = await call<View>('get_state');
+          const record = latest.claude_ips.find(r => r.service === service && r.ip === ip);
+          if (!record || record.status !== status || record.note !== note) throw new Error('记录已变化，请到记录库检查后修改。');
+          await call('save_claude_ip', { service, ip, status: previous?.status || 'pending', note, attachCurrent: false });
+        }, !!previous);
+      } finally { marking = false; }
       return;
     }
     if (b.dataset.markNode !== undefined && b.dataset.service) {
+      if (marking) return;
       const { service, status, markNode: key } = b.dataset;
       const x = state?.verdicts.find(v => v.service === service);
-      const note = state?.ai_nodes.find(r => r.service === service && r.key === x?.node_record)?.note || '';
-      await call('save_ai_node', { service, key, status, note, current: true });
-      toast(`节点 ${x?.node_name || ''} 已标为${status === 'safe' ? '可用' : '风险'}`);
+      const previous = state?.ai_nodes.find(r => r.service === service && r.key === x?.node_record);
+      if (previous?.status === status) return;
+      const note = previous?.note || '';
+      marking = true;
+      try {
+        await call('save_ai_node', { service, key, status, note, current: true });
+        const recordKey = previous?.key || key;
+        offerMarkUndo(`节点已人工标记为${safetyText(status)}`, async () => {
+          const latest = await call<View>('get_state');
+          const record = latest.ai_nodes.find(r => r.service === service && r.key === recordKey);
+          if (!record || record.status !== status || record.note !== note) throw new Error('节点记录已变化，请到记录库检查后修改。');
+          await call('save_ai_node', { service, key: record.key, status: previous?.status || 'pending', note, current: false });
+        }, !!previous);
+      } finally { marking = false; }
       return;
     }
     if (b.dataset.copyText) {
@@ -503,6 +573,7 @@ document.addEventListener('click', async event => {
         switchTab('diagnostics');
         break;
       case 'check':
+      case 'retry-network':
         await call('check_now');
         break;
       case 'pause':
@@ -570,7 +641,7 @@ function listInput(event: globalThis.Event) {
 document.addEventListener('input', e => {
   const field = e.target as HTMLInputElement;
   const form = field.closest<HTMLFormElement>('#settings-form');
-  if (form && field.name !== 'autostart' && !field.dataset.listAction) form.dataset.dirty = 'true';
+  if (form && !field.dataset.listAction) { form.dataset.dirty = 'true'; paintSettingsDraft(); }
   if ((e.target as HTMLElement).dataset.listAction === 'query' && !(e as InputEvent).isComposing) listInput(e);
 });
 document.addEventListener('compositionend', e => {
@@ -579,7 +650,7 @@ document.addEventListener('compositionend', e => {
 document.addEventListener('change', e => {
   const field = e.target as HTMLInputElement;
   const form = field.closest<HTMLFormElement>('#settings-form');
-  if (form && field.name !== 'autostart' && !field.dataset.listAction) form.dataset.dirty = 'true';
+  if (form && !field.dataset.listAction) { form.dataset.dirty = 'true'; paintSettingsDraft(); }
   if ((e.target as HTMLElement).dataset.listAction && (e.target as HTMLElement).dataset.listAction !== 'query') listInput(e);
 });
 

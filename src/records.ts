@@ -94,7 +94,8 @@ export function ipRecordRow(r: IpRecord) {
     <div class="record-actions">
       <button type="button" data-edit-service="${esc(r.service)}" data-edit-ip="${esc(r.ip)}">修改</button>
       <button type="button" data-route-service="${esc(r.service)}" data-route-ip="${esc(r.ip)}" ${routes.length ? '' : 'disabled'}>节点记录（${routes.length}）</button>
-      <button type="button" data-copy-service="${esc(r.service)}" data-copy-ip="${esc(r.ip)}" ${routes.length ? '' : 'disabled'}>复制</button>
+      <button type="button" data-copy-text="${esc(r.ip)}">复制 IP</button>
+      <button type="button" data-copy-service="${esc(r.service)}" data-copy-ip="${esc(r.ip)}" ${routes.length ? '' : 'disabled'}>复制节点信息</button>
     </div>
   </article>`;
 }

@@ -92,7 +92,7 @@ pub fn ai_service_title(mark: &str, x: &Verdict) -> String {
         return format!("{mark} {} · 已暂停", x.name);
     }
     let state = match x.level {
-        Level::Safe => "可用",
+        Level::Safe => "已标记可用",
         Level::Warn => {
             if x.health == Some(Status::Unreachable) {
                 "无法连接"
@@ -211,6 +211,6 @@ mod tests {
             node_name: "US-01".into(),
             ..Default::default()
         };
-        assert_eq!(ai_service_title("🟢", &v), "🟢 Claude · 可用 · US-01 · 8.8.8.8");
+        assert_eq!(ai_service_title("🟢", &v), "🟢 Claude · 已标记可用 · US-01 · 8.8.8.8");
     }
 }

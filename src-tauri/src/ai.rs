@@ -139,10 +139,23 @@ pub(crate) fn mark_service_ip(
 pub(crate) async fn test_ai_services(
     app: tauri::AppHandle,
     s: tauri::State<'_, Shared>,
+    service: Option<String>,
 ) -> Result<(), String> {
-    run_ai_tests(app, s.inner().clone()).await
+    run_selected_ai_tests(app, s.inner().clone(), service.as_deref()).await
 }
 pub(crate) async fn run_ai_tests(app: tauri::AppHandle, s: Shared) -> Result<(), String> {
+    run_selected_ai_tests(app, s, None).await
+}
+fn merge_ai_tests(records: &mut Vec<claude::ServiceTest>, tests: impl IntoIterator<Item = claude::ServiceTest>) {
+    for test in tests {
+        records.retain(|old| old.service != test.service);
+        records.push(test);
+    }
+}
+async fn run_selected_ai_tests(app: tauri::AppHandle, s: Shared, service: Option<&str>) -> Result<(), String> {
+    if service.is_some_and(|id| !["claude", "gemini"].contains(&id)) {
+        return Err("未知 AI 服务，请选择 Claude 或 Gemini".into());
+    }
     let (settings, generation) = {
         let mut d = lock(&s);
         if d.view.ai_testing {
@@ -153,18 +166,25 @@ pub(crate) async fn run_ai_tests(app: tauri::AppHandle, s: Shared) -> Result<(),
     };
     refresh(&app, &s);
     // The manual test also refreshes Google's view of the Gemini path (country + echo address).
-    let (claude, gemini, _) = tokio::join!(
-        claude::test_service("claude", &settings),
-        claude::test_service("gemini", &settings),
-        crate::exit_worker::observe_google(&s, &settings, generation)
+    let (claude, gemini) = tokio::join!(
+        async { if service != Some("gemini") { Some(claude::test_service("claude", &settings).await) } else { None } },
+        async {
+            if service == Some("claude") { return None; }
+            let (test, _) = tokio::join!(
+                claude::test_service("gemini", &settings),
+                crate::exit_worker::observe_google(&s, &settings, generation)
+            );
+            Some(test)
+        }
     );
     let stale = {
         let mut d = lock(&s);
         d.view.ai_testing = false;
         let stale = d.generation != generation;
         if !stale {
-            d.view.ai_tests = vec![claude, gemini];
-            let ips = d.view.ai_tests.iter().flat_map(|t| {
+            // A single-service retest preserves the other service's manual result.
+            merge_ai_tests(&mut d.view.ai_tests, [claude, gemini].into_iter().flatten());
+            let ips = d.view.ai_tests.iter().filter(|t| service.is_none_or(|id| t.service == id)).flat_map(|t| {
                 [t.ip.as_ref(), t.ipv6.as_ref()].into_iter().flatten()
                     .map(|ip| (t.service.clone(), ip.clone(), t.time.clone(), if ip.contains(':') { t.ipv6_basis.clone() } else { t.ip_basis.clone() }))
                     .collect::<Vec<_>>()
@@ -324,5 +344,26 @@ pub(crate) async fn save_claude_ip(
         Err(format!("内存已更新，保存失败：{e}"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod manual_test_tests {
+    use super::*;
+
+    #[test]
+    fn retest_preserves_other_service_result_and_replaces_only_requested_service() {
+        let result = |service: &str, time: &str, code| claude::ServiceTest {
+            service: service.into(), time: time.into(), http_code: Some(code), ..Default::default()
+        };
+        let mut records = vec![result("claude", "old", 403), result("gemini", "keep", 429)];
+        merge_ai_tests(&mut records, [result("claude", "new", 200)]);
+        assert_eq!(records.len(), 2);
+        let gemini = records.iter().find(|r| r.service == "gemini").unwrap();
+        assert_eq!(gemini.time, "keep");
+        assert_eq!(gemini.http_code, Some(429));
+        let claude = records.iter().find(|r| r.service == "claude").unwrap();
+        assert_eq!(claude.time, "new");
+        assert_eq!(claude.http_code, Some(200));
     }
 }

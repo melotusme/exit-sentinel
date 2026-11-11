@@ -19,7 +19,7 @@ export const probeList = new ListView<Probe>(
   { domestic: '国内 IPv4', foreign: '国外 IPv4', domestic6: '国内 IPv6', foreign6: '国外 IPv6' }
 );
 
-const levelText: Record<string, string> = { safe: '可以使用', warn: '需要确认', risk: '有风险', unknown: '未确认' };
+const levelText: Record<string, string> = { safe: '已标记可用', warn: '需要确认', risk: '有风险', unknown: '未确认' };
 const healthText: Record<string, string> = { reachable: '访问正常', restricted: '访问受限（403 / 429 等）', unreachable: '连接失败' };
 
 export function recordSeries(v: View) {
@@ -35,8 +35,9 @@ export function recordSeries(v: View) {
 function markButtons(kind: 'ip' | 'node', x: Verdict, current: string | null) {
   const target = kind === 'ip' ? `data-mark-ip="${esc(x.ip || '')}"` : `data-mark-node="${esc(x.node_key)}"`;
   return `<div class="mark-buttons" role="group" aria-label="${kind === 'ip' ? '标记出口 IP' : '标记节点'}">
-    ${(['safe', 'risk'] as const)
-      .map(status => `<button type="button" class="mark ${status} ${current === status ? 'selected' : ''}" data-service="${esc(x.service)}" data-status="${status}" ${target} aria-pressed="${current === status}">${status === 'safe' ? '可用' : '风险'}</button>`)
+    <span class="mark-label">人工标记</span>
+    ${(['pending', 'safe', 'risk'] as const)
+      .map(status => `<button type="button" class="mark ${status} ${current === status ? 'selected' : ''}" data-service="${esc(x.service)}" data-status="${status}" ${target} aria-pressed="${current === status}">${safetyText(status)}</button>`)
       .join('')}
   </div>`;
 }
@@ -52,7 +53,7 @@ function ipRow(x: Verdict) {
     <span class="verdict-label">出口 IP</span>
     <div class="verdict-value">
       <div class="ip-copy-line"><strong class="mono">${esc(x.ip)}</strong><button type="button" class="text-button compact" data-copy-text="${esc(x.ip)}">复制</button></div>
-      <small>${esc(x.ip_source)}${x.ip_checked ? ` · ${esc(ago(x.ip_checked))}` : ''} · <span class="safety ${esc(x.ip_status || 'none')}">${safetyText(x.ip_status)}</span></small>
+      <small>${esc(x.ip_source)}${x.ip_checked ? ` · ${esc(ago(x.ip_checked))}` : ''} · 人工标记：<span class="safety ${esc(x.ip_status || 'none')}">${safetyText(x.ip_status)}</span></small>
     </div>
     ${markButtons('ip', x, x.ip_status)}
   </div>`;
@@ -90,7 +91,7 @@ function regionRow(x: Verdict) {
 
 function healthRow(x: Verdict) {
   return `<div class="verdict-row">
-    <span class="verdict-label">访问</span>
+    <span class="verdict-label">当前网络</span>
     <div class="verdict-value">
       <strong>${x.health ? healthText[x.health] : '等待检测'}</strong>
       <small>${esc(x.health_detail || '每个检测周期请求一次主页')}</small>
@@ -103,7 +104,10 @@ function verdictCard(v: View, x: Verdict) {
   const process = x.service === 'claude'
     ? `Claude 桌面版：${v.claude.running === null ? '未知' : v.claude.running ? '运行中' : '未打开'}`
     : '';
-  const lastTest = test ? `最近测试 ${test.http_code === null ? '连接失败' : `HTTP ${test.http_code}`} · ${time(test.time)}` : '';
+  const old = test && (Date.now() - Date.parse(test.time) > Math.max(300, v.settings.interval * 2) * 1000 || (test.ip && x.ip && test.ip !== x.ip));
+  const lastTest = test ? `<details class="manual-test"><summary>${old ? '历史' : '上次'}手动测试 · ${esc(ago(test.time))}（展开结果）</summary>
+    <p>${esc(time(test.time))} · ${test.http_code === null ? '连接失败' : `HTTP ${test.http_code}`}<br>${esc(test.error || '')}</p>
+    <p>测试路径：${esc(test.path)}${test.ip ? ` · 出口 ${esc(test.ip)}` : ''}。这是当时的测试结果，不代表当前网络或账号状态。</p></details>` : '<small class="muted">尚未手动测试</small>';
   return `<section class="verdict-card level-${esc(x.level)}" aria-labelledby="verdict-${esc(x.service)}">
     <header class="verdict-head">
       <span class="service-badge ${esc(x.service)}">${esc(x.name)}</span>
@@ -111,8 +115,10 @@ function verdictCard(v: View, x: Verdict) {
     </header>
     <h2 id="verdict-${esc(x.service)}" class="verdict-headline">${esc(x.headline)}</h2>
     <div class="verdict-rows">${regionRow(x)}${ipRow(x)}${nodeRow(x)}${healthRow(x)}</div>
+    ${lastTest}
     <footer class="verdict-foot">
-      <small>${esc([process, lastTest].filter(Boolean).join(' · '))}</small>
+      <small>${esc(process)}</small>
+      <button type="button" data-test-service="${esc(x.service)}" ${v.ai_testing || v.paused ? 'disabled' : ''}>重测 ${esc(x.name)}</button>
       <button type="button" class="text-button" data-copy-service="${esc(x.service)}" ${x.node_name ? '' : 'disabled'}>复制节点信息</button>
     </footer>
   </section>`;
@@ -127,10 +133,12 @@ function exitTile(v: View, group: string, title: string) {
   const g = p?.ip ? geoCache.get(p.ip) : null;
   const where = g ? [g.country, g.region, g.city].filter(Boolean).join(' · ') : p?.ip ? '位置待查询' : p?.error || '';
   const tax = g?.country_code === 'US' && g?.sales_tax?.label ? ` · ${g.sales_tax.label}` : '';
+  const optional = group.endsWith('6') && !v.settings.ipv6_required;
   return `<article class="exit-tile ${v.paused ? 'is-paused' : ''}">
-    <span class="exit-tile-title">${esc(title)}</span>
+    <span class="exit-tile-title">${esc(title)}${optional ? ' · 可选' : ''}</span>
     <strong class="mono">${esc(p?.ip || (v.paused ? '已暂停' : p?.checked ? '不可达' : '等待检测'))}</strong>
     <small>${esc(where + tax)}</small>
+    ${optional ? '<small>不影响总体状态</small>' : ''}
     <div class="exit-tile-foot">
       <small>${p?.ip ? `${p.latency} ms · ${esc(p.label)}` : ''}</small>
       ${p?.ip ? `<div class="tile-actions"><button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button><button type="button" class="text-button compact" data-detail="${esc(p.id)}">详情 ${icon('arrow')}</button></div>` : ''}
@@ -204,7 +212,7 @@ export function renderOverview(v: View): string {
       <div class="status-text">
         <div class="status-headline"><strong>${titles[v.status] || v.status}</strong>${googleHealth(v)}</div>
         ${v.pending_changes?.length ? `<small class="status-issues">待确认：${v.pending_changes.map(esc).join('；')}</small>` : ''}
-        ${v.issues?.length ? `<small class="status-issues">异常项：${v.issues.map(esc).join('；')}。可在设置中忽略。</small>` : ''}
+        ${v.issues?.length ? `<small class="status-issues">异常项：${v.issues.map(esc).join('；')}。</small><div class="issue-actions"><button type="button" id="show-probes">查看检测明细</button><button type="button" data-settings-section="ignored-checks">管理异常检测项</button><button type="button" id="retry-network" ${v.checking || v.paused ? 'disabled' : ''}>重试网络检测</button></div>` : ''}
         <small>上次检测：${time(v.last_check)} · 每 ${v.settings.interval} 秒</small>
       </div>
       <div class="status-actions">
@@ -219,10 +227,10 @@ export function renderOverview(v: View): string {
 
     <div class="section-head">
       <h2>AI 服务判定</h2>
-      <button type="button" id="test-ai" ${v.ai_testing || v.paused ? 'disabled' : ''}>${v.ai_testing ? '正在测试…' : '测试 Claude 和 Gemini'}</button>
+      <button type="button" id="test-ai" ${v.ai_testing || v.paused ? 'disabled' : ''}>${v.ai_testing ? '正在深入测试…' : '深入测试 AI 服务'}</button>
     </div>
     <div class="verdict-grid">${v.verdicts.map(x => verdictCard(v, x)).join('')}</div>
-    <p class="small muted">结论来自你登记的 IP / 节点状态；Gemini 另看 Google 判定的地区，判成中国时直接显示有风险。Claude 的 IP 是本应用经同一路径访问 claude.ai 看到的出口，不代表账号状态。</p>
+    <p class="small muted">刷新网络状态：检查出口与网站连通性。深入测试：主动请求 Claude / Gemini 并复核 Gemini 地区。人工标记只表示你登记的使用经验，不代表账号状态。</p>
 
     <div class="section-head"><h2>网络出口</h2>${uplinkChip(v.uplink, v.network)}</div>
     <div class="exit-tiles">

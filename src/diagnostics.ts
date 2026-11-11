@@ -106,7 +106,7 @@ export function renderDiagnosticsTab(): string {
       </div>
     </section>
 
-    <div class="curl-main">
+    <div class="curl-main ${r ? '' : 'is-empty'}">
       <section class="panel curl-summary">
         <div class="curl-status-header">
           <div class="curl-status ${!r ? 'neutral' : isBad ? 'bad' : 'ok'}" role="status">
@@ -116,8 +116,9 @@ export function renderDiagnosticsTab(): string {
           ${r ? `<span class="curl-timestamp">${esc(new Date(r.time).toLocaleString('zh-CN', { hour12: false }))}</span>` : ''}
         </div>
         <div class="curl-target">${esc(r?.url || '选择上方站点，再点击“测试当前站点”。')}</div>
+        ${!r ? '<p class="curl-note">先测试需要排查的站点。完成后会显示连接结果、各阶段耗时和原始日志；也可以一次测试全部站点。</p>' : ''}
         ${r ? `<p class="curl-note">${esc(r.path)} · ${family === 'auto' ? '自动' : `IPv${family}`} · GET · 最多 15 秒 · HTTPS 证书校验</p>` : ''}
-        <p class="curl-note">地址族约束适用于 curl 建立连接的对端；使用代理时，该对端可能是代理，不能确认代理到目标的协议。</p>
+        ${r ? '<p class="curl-note">地址族约束适用于 curl 建立连接的对端；使用代理时，该对端可能是代理，不能确认代理到目标的协议。</p>' : ''}
 
         <div class="curl-waterfall">
           <div class="waterfall-title">阶段耗时分布</div>
@@ -166,7 +167,7 @@ export function renderDiagnosticsTab(): string {
             .join('')}
         </div>
         ${m.url_effective ? `<p class="curl-note"><strong>最终 URL：</strong>${esc(m.url_effective)}</p>` : ''}
-        <p class="curl-note">远端 IP 是 curl 建立连接的对端（经代理或 TUN 时可能是代理地址或 Fake-IP）；本地连接 IP 不是公网出口 IP。</p>
+        ${r ? '<p class="curl-note">远端 IP 是 curl 建立连接的对端（经代理或 TUN 时可能是代理地址或 Fake-IP）；本地连接 IP 不是公网出口 IP。</p>' : ''}
         ${r?.truncated ? '<p class="curl-error">正文达到 256 KiB 限制，内容已截断；curl 63 为大小限制，不等于网络断开。</p>' : ''}
         ${state.error ? `<p class="curl-error">${esc(state.error)}</p>` : ''}
       </section>

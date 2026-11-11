@@ -25,7 +25,7 @@ export const titles: Record<string, string> = {
   offline: '所有检测站不可达',
   risk: '存在风险出口 · 请勿使用',
   degraded: '部分检测异常',
-  usable: '可以使用 · 部分辅助检测异常',
+  usable: 'AI 出口已标记可用 · 辅助检测异常',
   changed: '发现变化，请确认',
   warn: 'AI 出口待确认',
   split: '正在监控多个出口',

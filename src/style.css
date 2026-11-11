@@ -2163,3 +2163,21 @@ summary { cursor: pointer; min-height: 28px; line-height: 28px; font-size: 13px;
 .status-issues {
   color: var(--text-secondary);
 }
+.settings-form { display: grid; gap: 18px; }
+.settings-links { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.settings-links a { color: var(--primary); text-underline-offset: 3px; }
+.settings-stack [id], .probe-panel { scroll-margin-top: 100px; }
+.settings-save-actions { margin: 0; }
+.settings-stack { padding-bottom: 90px; }
+.settings-draft-bar, .mark-feedback {
+  position: fixed; bottom: 20px; right: 24px; left: 250px; z-index: 50;
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px;
+  padding: 14px 18px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); font-size: 13px;
+}
+.settings-draft-bar span, .mark-feedback span { flex: 1; min-width: 160px; }
+.settings-draft-bar[hidden], .mark-feedback[hidden] { display: none; }
+body:has(.settings-draft-bar:not([hidden])) .mark-feedback { bottom: 110px; }
+@media (max-width: 800px) {
+  .settings-draft-bar, .mark-feedback { left: 16px; right: 16px; bottom: 12px; }
+}

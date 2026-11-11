@@ -20,8 +20,7 @@ const escape = (s: string) =>
   s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
 export function updateSettings() {
-  return `<div class="settings-divider"></div>
-    <div class="card-header-block compact">
+  return `<div class="card-header-block compact">
       <div>
         <span class="eyebrow">UPDATES</span>
         <h2>软件更新</h2>

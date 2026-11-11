@@ -348,3 +348,6 @@
   .curl-waterfall { padding: 12px 10px; }
   .curl-raw pre { height: 300px; padding: 12px; }
 }
+.curl-main.is-empty .curl-waterfall,
+.curl-main.is-empty .curl-stats,
+.curl-main.is-empty .curl-raw { display: none; }

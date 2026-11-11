@@ -122,6 +122,13 @@
 .verdict-note { color: var(--muted); font-size: 12px; max-width: 140px; text-align: right; }
 
 .mark-buttons { display: inline-flex; gap: 6px; }
+.mark-buttons { flex-wrap: wrap; max-width: 200px; }
+.mark-label { flex-basis: 100%; color: var(--muted); font-size: 11px; }
+.manual-test { color: var(--muted); font-size: 12px; }
+.manual-test summary { cursor: pointer; padding: 6px 0; }
+.manual-test p { margin: 6px 0; overflow-wrap: anywhere; }
+.verdict-foot { flex-wrap: wrap; }
+.issue-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .mark-buttons .mark { padding: 4px 10px; font-size: 12px; min-height: 28px; }
 .mark-buttons .mark.safe.selected { color: var(--green); background: var(--success-tonal); border-color: var(--success-border); }
 .mark-buttons .mark.risk.selected { color: var(--danger); background: var(--danger-tonal); border-color: var(--danger-border); }

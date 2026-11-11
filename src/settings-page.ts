@@ -7,6 +7,7 @@ import { loadSync, syncSettings } from './sync';
 import { updateSettings } from './updater';
 import { esc } from './ui';
 import { ListView } from './list';
+import { refreshSearchSelects } from './select';
 import type { Settings } from './types';
 
 export interface SettingsDeps {
@@ -62,7 +63,7 @@ export const renderIgnoreList = () => ignoreList.render(CHECKS, ignoreRow);
 const ignoredChecks = (s: Settings) => {
   ignoredDraft = new Set(s.ignored_checks || []);
   return `
-  <div class="field field-full ignore-field">
+  <div id="ignored-checks" tabindex="-1" class="field field-full ignore-field">
     <span>忽略的检测项</span>
     <small>勾选的项目照常检测和显示，但不再让菜单栏变成“部分检测异常”。只保存在本机。</small>
     <div class="ignore-list panel">${renderIgnoreList()}</div>
@@ -83,7 +84,9 @@ export function setAutostart(value: boolean | null) {
 export function renderSettings(s: Settings) {
   deps.content.innerHTML = `
     <div class="settings-stack">
-      <form id="settings-form" class="panel settings settings-card">
+      <nav class="settings-links" aria-label="设置分区"><a href="#monitor-settings">监控与通知</a><a href="#routing-settings">代理路径</a><a href="#system-settings">系统启动</a><a href="#webdav-settings">配置同步</a><a href="#update-settings">软件更新</a></nav>
+      <form id="settings-form" class="settings-form">
+      <section id="monitor-settings" class="panel settings settings-card">
         <div class="card-header-block">
           <div>
             <span class="eyebrow">MONITORING & ALERTS</span>
@@ -100,10 +103,6 @@ export function renderSettings(s: Settings) {
           <input name="notifications" type="checkbox" ${s.notifications ? 'checked' : ''}>
         </label>
         <label class="toggle">
-          <span>开机自启<small id="autostart-status">${auto === null ? '正在读取系统状态…' : '登录这台电脑后在托盘后台运行。切换立即生效，无需保存。'}</small></span>
-          <input name="autostart" type="checkbox" role="switch" ${auto ? 'checked' : ''} ${auto === null || autoBusy ? 'disabled' : ''}>
-        </label>
-        <label class="toggle">
           <span>保存变化记录<small>只保留最近 200 条；关闭后清除已保存的记录。</small></span>
           <input name="retain_history" type="checkbox" ${s.retain_history ? 'checked' : ''}>
         </label>
@@ -112,8 +111,8 @@ export function renderSettings(s: Settings) {
           <input name="ipv6_required" type="checkbox" ${s.ipv6_required ? 'checked' : ''}>
         </label>
         ${ignoredChecks(s)}
-        ${updateSettings()}
-        <div class="settings-divider"></div>
+      </section>
+      <section id="routing-settings" class="panel settings settings-card">
         <div class="card-header-block compact">
           <div>
             <span class="eyebrow">ROUTING & PROXIES</span>
@@ -157,13 +156,27 @@ export function renderSettings(s: Settings) {
             <small>留空时用 Google STUN 服务器回显 Gemini 出口（UDP，走 google.com 分流）。只有 UDP 不经代理时才需要填写：必须回显公网 IP，并且和 Gemini 命中同一策略 / 节点。Google 判定的地区始终从 Gemini 页面读取。</small>
           </label>
         </div>
-        <div class="form-actions">
+      </section>
+        <div class="form-actions settings-save-actions">
           <button class="primary" type="submit">保存设置</button>
           <button type="button" id="test-notification">发送测试通知</button>
         </div>
         <p id="permission" class="small muted status-note"></p>
       </form>
+      <div id="settings-draft-bar" class="settings-draft-bar" hidden>
+        <span role="status">监控与代理设置有未保存修改</span>
+        <button type="button" id="restore-settings">还原修改</button>
+        <button type="submit" form="settings-form" class="primary">保存监控与代理设置</button>
+      </div>
+      <section id="system-settings" class="panel settings settings-card">
+        <h2>系统启动</h2>
+        <label class="toggle">
+          <span>开机自启<small id="autostart-status">${auto === null ? '正在读取系统状态…' : '登录这台电脑后在托盘后台运行。切换立即生效，无需保存。'}</small></span>
+          <input name="autostart" type="checkbox" role="switch" ${auto ? 'checked' : ''} ${auto === null || autoBusy ? 'disabled' : ''}>
+        </label>
+      </section>
       ${syncSettings()}
+      <section id="update-settings" class="panel settings settings-card">${updateSettings()}<p class="small muted">更新偏好立即生效，无需保存监控设置。</p></section>
       ${renderGuide()}
     </div>`;
   void loadSync();
@@ -177,6 +190,32 @@ export function renderSettings(s: Settings) {
     })
     .catch(() => {});
 }
+
+export function paintSettingsDraft() {
+  const form = deps.content.querySelector<HTMLFormElement>('#settings-form');
+  const bar = deps.content.querySelector<HTMLElement>('#settings-draft-bar');
+  if (bar) bar.hidden = form?.dataset.dirty !== 'true';
+}
+
+document.addEventListener('click', event => {
+  if (!(event.target as HTMLElement).closest('#restore-settings') || settingsSaving) return;
+  const form = deps.content.querySelector<HTMLFormElement>('#settings-form');
+  if (!form) return;
+  const s = deps.settings();
+  for (const field of form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select')) {
+    if (!(field.name in s)) continue;
+    const value = s[field.name as keyof Settings];
+    if (field instanceof HTMLInputElement && field.type === 'checkbox') field.checked = value === true;
+    else field.value = String(value);
+  }
+  ignoredDraft = new Set(s.ignored_checks || []);
+  form.querySelector('.ignore-list')!.innerHTML = renderIgnoreList();
+  refreshSearchSelects(form);
+  form.dataset.dirty = 'false';
+  paintSettingsDraft();
+  deps.toast('已还原监控与代理设置；系统启动、同步和更新偏好保持各自状态。');
+  form.querySelector<HTMLInputElement>('[name=interval]')?.focus();
+});
 
 export async function permission() {
   let ok = await isPermissionGranted();
@@ -266,7 +305,7 @@ document.addEventListener('submit', async event => {
   const form = event.target as HTMLFormElement;
   const f = new FormData(form);
   const submit = form.querySelector<HTMLButtonElement>('[type=submit]')!;
-  const controls = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button'));
+  const controls = Array.from(deps.content.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#settings-form input, #settings-form select, #settings-form button, #settings-draft-bar button'));
   const disabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   submit.disabled = true;
@@ -290,6 +329,7 @@ document.addEventListener('submit', async event => {
     if (s.notifications) await permission();
     await deps.call('save_settings', { settings: s });
     form.dataset.dirty = 'false';
+    paintSettingsDraft();
     deps.toast('设置已保存');
   } catch (e) {
     deps.toast(String(e), true);

@@ -111,7 +111,7 @@ fn subject_label(status: &Option<Safety>, what: &str) -> String {
     match status {
         None => format!("当前{what}尚未登记"),
         Some(Safety::Pending) => format!("当前{what}待确认"),
-        Some(Safety::Safe) => format!("当前{what}已确认可用"),
+        Some(Safety::Safe) => format!("当前{what}已人工标记可用"),
         Some(Safety::Risk) => format!("当前{what}已标记为风险"),
     }
 }
@@ -154,7 +154,11 @@ fn decide(v: &mut Verdict) {
     };
     v.level = if *status == Some(Safety::Safe) { Level::Safe } else { Level::Warn };
     v.headline = match v.level {
-        Level::Safe => format!("可以使用：{}", subject_label(status, what)),
+        Level::Safe => format!("{} · {}", match v.health {
+            Some(Status::Reachable) => "网络可达",
+            Some(Status::Restricted) => "网络可达，访问受限",
+            _ => "连通性待确认",
+        }, subject_label(status, what)),
         _ => format!("需要确认：{}", subject_label(status, what)),
     };
 }
@@ -255,7 +259,26 @@ mod tests {
         let ips = [ip(Safety::Safe)];
         let v = compute(input(&ips, &[], None, true));
         assert_eq!(v.level, Level::Safe);
-        assert!(v.headline.contains("可以使用"));
+        assert!(v.headline.contains("已人工标记可用"));
+        assert!(v.headline.contains("连通性待确认"));
+        assert!(!v.headline.contains("可以使用"));
+    }
+
+    #[test]
+    fn manual_safe_mark_does_not_claim_healthy_access_when_restricted_or_unreachable() {
+        for (health, expected, level) in [
+            (Status::Reachable, "网络可达 ·", Level::Safe),
+            (Status::Restricted, "网络可达，访问受限", Level::Safe),
+            (Status::Unreachable, "当前无法访问", Level::Warn),
+        ] {
+            let mut v = Verdict {
+                name: "Claude".into(), ip: Some("8.8.8.8".into()),
+                ip_status: Some(Safety::Safe), health: Some(health), ..Default::default()
+            };
+            decide(&mut v);
+            assert_eq!(v.level, level);
+            assert!(v.headline.contains(expected), "{}", v.headline);
+        }
     }
 
     #[test]
