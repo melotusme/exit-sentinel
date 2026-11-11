@@ -83,7 +83,7 @@ function regionRow(x: Verdict) {
     <span class="verdict-label">Google 判定</span>
     <div class="verdict-value">
       <strong class="${blocked ? 'region-blocked' : ''}">${esc(x.region_label || '未知')}</strong>
-      <small>${esc(x.region_label ? `Gemini 页面里 Google 给出的地区 · ${ago(x.region_checked)}` : x.region_hint)}</small>
+      <small>${esc(x.region_label ? `${x.region_source || 'Gemini 页面'}里 Google 给出的地区 · ${ago(x.region_checked)}` : x.region_hint)}</small>
     </div>
   </div>`;
 }

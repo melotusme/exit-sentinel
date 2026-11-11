@@ -43,6 +43,8 @@ pub struct Verdict {
     pub region_code: String,
     pub region_label: String,
     pub region_checked: String,
+    /// Page Google's country was read from.
+    pub region_source: String,
     pub region_hint: String,
 }
 
@@ -50,6 +52,7 @@ pub struct Verdict {
 pub struct Region {
     pub code: String,
     pub checked: String,
+    pub source: String,
     pub error: Option<String>,
 }
 
@@ -186,6 +189,7 @@ pub fn compute(input: Input) -> Verdict {
         v.region_code = region.code.clone();
         v.region_label = if region.code.is_empty() { String::new() } else { crate::google::country_name(&region.code) };
         v.region_checked = region.checked.clone();
+        v.region_source = region.source.clone();
         v.region_hint = region.error.clone().unwrap_or_default();
     }
     decide(&mut v);
@@ -291,13 +295,13 @@ mod tests {
         let nodes = [node(Safety::Safe)];
         let route = live_route();
         let mut i = input(&[], &nodes, Some(&route), false);
-        i.region = Some(Region { code: "CHN".into(), checked: "t".into(), error: None });
+        i.region = Some(Region { code: "CHN".into(), checked: "t".into(), source: String::new(), error: None });
         let v = compute(i);
         assert_eq!(v.level, Level::Risk);
         assert!(v.headline.contains("中国"));
         assert_eq!(v.region_label, "中国");
         let mut ok = input(&[], &nodes, Some(&route), false);
-        ok.region = Some(Region { code: "USA".into(), checked: "t".into(), error: None });
+        ok.region = Some(Region { code: "USA".into(), checked: "t".into(), source: String::new(), error: None });
         let v = compute(ok);
         assert_eq!(v.level, Level::Safe);
         assert_eq!(v.region_label, "美国");

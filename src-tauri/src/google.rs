@@ -47,25 +47,70 @@ fn decode(body: &[u8], gzip: bool) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
-/// Country Google assigns to this machine's Gemini path (ISO alpha-3), using the Gemini proxy setting.
-pub async fn judged_country(proxy: &str) -> Result<String, String> {
-    let client = crate::net::client(proxy, false)?;
+/// Pages that carry the One Google bar country. Gemini first; the others are on google.com, so
+/// they follow the same proxy rule, and Google rarely answers them with its bot check.
+const REGION_PAGES: &[(&str, &str)] = &[
+    (GEMINI_PAGE, "Gemini 页面"),
+    ("https://support.google.com/gemini?hl=en", "Gemini 帮助中心"),
+    ("https://store.google.com/?hl=en-US", "Google Store"),
+];
+
+/// Google's "unusual traffic" page (www.google.com/sorry/...). Scripted requests from data-centre
+/// IPs often land here while a signed-in browser on the same exit works normally.
+pub fn is_sorry(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or_default();
+    (host == "google.com" || host.ends_with(".google.com")) && url.path().starts_with("/sorry")
+}
+
+/// A response that is a redirect to Google's bot check. The HTTP clients stop at that redirect.
+pub fn is_sorry_redirect(r: &reqwest::Response) -> bool {
+    if is_sorry(r.url()) {
+        return true;
+    }
+    r.status().is_redirection()
+        && r.headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| r.url().join(v).ok())
+            .is_some_and(|u| is_sorry(&u))
+}
+
+pub const SORRY_NOTE: &str = "Google 人机验证页（程序请求被判为异常流量，浏览器通常仍可正常使用）";
+
+async fn page_country(client: &reqwest::Client, url: &str) -> Result<String, String> {
     let r = client
-        .get(GEMINI_PAGE)
+        .get(url)
         .header("User-Agent", BROWSER_UA)
         .header("Accept-Language", "en-US,en;q=0.9")
         .header("Accept-Encoding", "gzip")
         .send()
         .await
-        .map_err(|_| "无法连接 gemini.google.com".to_string())?;
+        .map_err(|_| "无法连接".to_string())?;
+    if is_sorry_redirect(&r) {
+        return Err(SORRY_NOTE.into());
+    }
     let status = r.status();
     let gzip = r.headers().get("content-encoding").and_then(|v| v.to_str().ok()) == Some("gzip");
-    let body = r.bytes().await.map_err(|_| "读取 Gemini 页面失败".to_string())?;
+    let body = r.bytes().await.map_err(|_| "读取页面失败".to_string())?;
     if body.len() > MAX_COMPRESSED {
-        return Err("Gemini 页面过大，已放弃解析".into());
+        return Err("页面过大，已放弃解析".into());
     }
     let page = decode(&body, gzip)?;
-    extract_country(&page).ok_or_else(|| format!("Gemini 页面（HTTP {}）里没有找到 Google 判定的地区", status.as_u16()))
+    extract_country(&page).ok_or_else(|| format!("HTTP {}，页面里没有 Google 判定的地区", status.as_u16()))
+}
+
+/// Country Google assigns to this machine's Gemini path (ISO alpha-3) and the page it came from,
+/// using the Gemini proxy setting. Falls back to other Google pages when one is blocked.
+pub async fn judged_country(proxy: &str) -> Result<(String, String), String> {
+    let client = crate::net::client(proxy, false)?;
+    let mut errors = Vec::new();
+    for (url, name) in REGION_PAGES {
+        match page_country(&client, url).await {
+            Ok(code) => return Ok((code, name.to_string())),
+            Err(e) => errors.push(format!("{name}：{e}")),
+        }
+    }
+    Err(errors.join("；"))
 }
 
 /// Source address as seen by Google's STUN server (RFC 5389 binding request, IPv4).
@@ -148,6 +193,16 @@ mod tests {
     }
 
     #[test]
+    fn recognises_google_bot_check() {
+        let u = |s: &str| reqwest::Url::parse(s).unwrap();
+        assert!(is_sorry(&u("https://www.google.com/sorry/index?continue=https://gemini.google.com/")));
+        assert!(is_sorry(&u("https://google.com/sorry/index")));
+        assert!(!is_sorry(&u("https://gemini.google.com/app")));
+        assert!(!is_sorry(&u("https://www.google.com/search?q=sorry")));
+        assert!(!is_sorry(&u("https://google.com.evil.test/sorry/index")));
+    }
+
+    #[test]
     fn decodes_ipv6_mapped_address() {
         // Captured from Google STUN on this machine.
         let msg = hex("010100182112a442358d4f83e6ea300eff5b73c2002000140002f76e07160c02358e4e63e6ea300eff5b633d");
@@ -165,6 +220,10 @@ mod tests {
     #[ignore = "opt-in live request to gemini.google.com and Google STUN"]
     async fn live_google_view() {
         println!("country={:?}", judged_country("").await);
+        let client = crate::net::client("", false).unwrap();
+        for (url, name) in REGION_PAGES {
+            println!("{name}={:?}", page_country(&client, url).await);
+        }
         println!("stun={:?}", tokio::task::spawn_blocking(stun_ip).await.unwrap());
     }
 }

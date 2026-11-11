@@ -33,6 +33,8 @@ pub struct Monitor {
     /// Gemini only: country Google assigns to this path (ISO alpha-3, e.g. "USA", "CHN").
     pub country: String,
     pub country_checked: String,
+    /// Page the country was read from (Gemini page, or a fallback when that one is blocked).
+    pub country_source: String,
     pub country_error: Option<String>,
     pub ip: Option<String>,
     pub ipv6: Option<String>,
@@ -209,7 +211,9 @@ pub async fn test_service(service: &str, settings: &crate::model::Settings) -> S
     match client.get(url).send().await {
         Ok(r) => {
             report.http_code = Some(r.status().as_u16());
-            if !r.status().is_success() {
+            if crate::google::is_sorry_redirect(&r) {
+                report.error = Some(format!("{}；网络可达，不代表浏览器或账号不可用", crate::google::SORRY_NOTE));
+            } else if !r.status().is_success() {
                 report.error = Some(format!("主页 HTTP {}；不代表账号不可用", r.status()));
             }
         }

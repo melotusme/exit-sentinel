@@ -23,6 +23,7 @@ pub(crate) fn compute_verdicts(v: &View) -> Vec<verdict::Verdict> {
             let region = (service == "gemini" && !live.country_checked.is_empty()).then(|| verdict::Region {
                 code: live.country.clone(),
                 checked: live.country_checked.clone(),
+                source: live.country_source.clone(),
                 error: live.country_error.clone(),
             });
             verdict::compute(verdict::Input {

@@ -1,3 +1,9 @@
+## 0.7.2
+
+- Gemini 网站访问识别 Google 的人机验证页（google.com/sorry）：程序请求从机房 IP 出去时常被跳到这里，浏览器仍可正常使用。现在按“网络可达”处理，不再误报“无法访问 Gemini”；“测试 Claude 和 Gemini”也不再把它当作失败。
+- Google 判定的出口地区增加备用来源：Gemini 页面被人机验证挡住时，依次改读 Gemini 帮助中心和 Google Store 页面里的地区，并标明来源。
+- “网站访问状态”新增 Antigravity（antigravity.google），走 Google 同一分流，显示同一出口地区；可在设置中忽略。
+
 ## 0.7.1
 
 - 顶部新增「IP 查询」：输入公网 IPv4 或 IPv6，查看归属地、运营商、ASN、网络类型参考、时区、邮编及附近公开地点。查询结果本地缓存，支持重新获取，不会加入监控或 IP 记录库。

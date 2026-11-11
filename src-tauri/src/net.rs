@@ -20,12 +20,25 @@ fn client_for_probe(proxy: &str, ipv6: bool, force_v6_direct: bool) -> Result<Cl
 pub fn connectivity_client(proxy: &str) -> Result<Client, String> {
     client_builder(proxy)?.build().map_err(|_| "无法建立连通性检测客户端".into())
 }
+/// Up to 3 redirects, but stop at Google's bot check so callers can see it instead of a loop
+/// between gemini.google.com and www.google.com/sorry.
+fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|a| {
+        if crate::google::is_sorry(a.url()) {
+            a.stop()
+        } else if a.previous().len() >= 3 {
+            a.error("重定向次数过多")
+        } else {
+            a.follow()
+        }
+    })
+}
 fn client_builder(proxy: &str) -> Result<reqwest::ClientBuilder, String> {
     let mut b = Client::builder()
         .timeout(Duration::from_secs(12))
         .connect_timeout(Duration::from_secs(6))
         .user_agent("ExitSentinel/0.1 (personal network monitor)")
-        .redirect(reqwest::redirect::Policy::limited(3));
+        .redirect(redirect_policy());
     if proxy == "direct" {
         b = b.no_proxy();
     } else if !proxy.is_empty() {

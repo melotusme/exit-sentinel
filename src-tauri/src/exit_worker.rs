@@ -98,12 +98,14 @@ pub async fn observe_google(s: &Shared, settings: &crate::model::Settings, gener
     let live = &mut d.view.gemini;
     live.route = Some(shadowrocket::correlate(&fresh, fresh.clone()));
     match &country {
-        Ok(code) => {
+        Ok((code, source)) => {
             live.country = code.clone();
+            live.country_source = source.clone();
             live.country_error = None;
         }
         Err(e) => {
             live.country.clear();
+            live.country_source.clear();
             live.country_error = Some(e.clone());
         }
     }

@@ -320,7 +320,7 @@ pub fn build(
         }
     };
     let services = Submenu::with_id(app, "service-health", health_summary, true)?;
-    for (id, name) in [("google", "Google"), ("claude", "Claude"), ("gemini", "Gemini")] {
+    for (id, name) in [("google", "Google"), ("claude", "Claude"), ("gemini", "Gemini"), ("antigravity", "Antigravity")] {
         let title = if v.paused {
             format!("{name} · 监控已暂停")
         } else {
@@ -374,11 +374,15 @@ pub fn build(
 /// Google and Gemini share one exit judgement: the country Google assigns on the Gemini path.
 /// Claude's detail already carries the Cloudflare trace location.
 pub fn site_detail(detail: &str, id: &str, gemini: &crate::claude::Monitor) -> String {
-    if id != "google" && id != "gemini" {
+    if !matches!(id, "google" | "gemini" | "antigravity") {
         return detail.to_string();
     }
     let region = if !gemini.country.is_empty() {
-        format!("出口地区 {}", crate::google::country_name(&gemini.country))
+        let name = crate::google::country_name(&gemini.country);
+        match gemini.country_source.as_str() {
+            "" | "Gemini 页面" => format!("出口地区 {name}"),
+            source => format!("出口地区 {name}，来自{source}"),
+        }
     } else if gemini.country_error.is_some() {
         "出口地区未读取到".to_string()
     } else {
@@ -636,6 +640,8 @@ mod tests {
         assert_eq!(site_detail("HTTP 200", "google", &m), "HTTP 200 · 出口地区 美国");
         assert_eq!(site_detail("HTTP 200", "gemini", &m), "HTTP 200 · 出口地区 美国");
         assert_eq!(site_detail("HTTP 200 · 出口地区 US", "claude", &m), "HTTP 200 · 出口地区 US");
+        m.country_source = "Gemini 帮助中心".into();
+        assert_eq!(site_detail("HTTP 200", "antigravity", &m), "HTTP 200 · 出口地区 美国，来自Gemini 帮助中心");
         m.country.clear();
         m.country_error = Some("超时".into());
         assert_eq!(site_detail("HTTP 200", "gemini", &m), "HTTP 200 · 出口地区未读取到");

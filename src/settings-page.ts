@@ -24,6 +24,7 @@ const IGNORABLE: [string, string][] = [
   ['site:google', 'Google 网站访问'],
   ['site:claude', 'Claude 网站访问'],
   ['site:gemini', 'Gemini 网站访问'],
+  ['site:antigravity', 'Antigravity 网站访问'],
   ['probe:cn-ipip', '国内 · IPIP'],
   ['probe:cn-3322', '国内 · 3322'],
   ['probe:global-cf', '国外 · Cloudflare'],

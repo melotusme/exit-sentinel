@@ -238,7 +238,9 @@ async fn check(id: &str, name: &str, url: &str, proxy: &str, kind: Kind) -> Read
     let (http_code, status, detail) = match response {
         Ok(r) => {
             let code = r.status().as_u16();
-            if is_challenge(code, r.headers()) {
+            if crate::google::is_sorry_redirect(&r) {
+                (Some(code), Status::Reachable, format!("{}，网络可达", crate::google::SORRY_NOTE))
+            } else if is_challenge(code, r.headers()) {
                 (
                     Some(code),
                     Status::Reachable,
@@ -272,7 +274,7 @@ async fn check(id: &str, name: &str, url: &str, proxy: &str, kind: Kind) -> Read
     }
 }
 pub async fn check_all(settings: &crate::model::Settings) -> Vec<Reading> {
-    let (google, claude, gemini) = tokio::join!(
+    let (google, claude, gemini, antigravity) = tokio::join!(
         check(
             "google",
             "Google",
@@ -294,8 +296,16 @@ pub async fn check_all(settings: &crate::model::Settings) -> Vec<Reading> {
             &settings.gemini_proxy,
             Kind::Page
         ),
+        // Antigravity follows the Google rule set (antigravity.google, *.googleapis.com).
+        check(
+            "antigravity",
+            "Antigravity",
+            "https://antigravity.google/",
+            &settings.gemini_proxy,
+            Kind::Page
+        ),
     );
-    vec![google, claude, gemini]
+    vec![google, claude, gemini, antigravity]
 }
 
 #[cfg(test)]
@@ -325,7 +335,7 @@ mod tests {
         assert!(monitor.apply(&mut down).is_empty());
         let mut down = check_all(&fault).await;
         let alerts = monitor.apply(&mut down);
-        assert_eq!(alerts.len(), 3);
+        assert_eq!(alerts.len(), 4);
         assert!(alerts.iter().all(|a| a.title.contains("无法连接")));
         assert!(monitor.apply(&mut down).is_empty());
         // Restore the configured path, then establish a fresh baseline on that path.

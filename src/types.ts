@@ -147,6 +147,7 @@ export interface Verdict {
   region_code: string;
   region_label: string;
   region_checked: string;
+  region_source: string;
   region_hint: string;
 }
 export interface ExitMonitor {
@@ -158,6 +159,7 @@ export interface ExitMonitor {
   checked_ip: string;
   country: string;
   country_checked: string;
+  country_source: string;
   country_error: string | null;
   ip: string | null;
   source: string;
