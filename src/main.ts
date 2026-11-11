@@ -17,7 +17,7 @@ import {
   captureDrafts, restoreDrafts, clearDrafts, fillIp, fillNode, ipRecordRow, nodeRecordRow,
 } from './records';
 import { ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart } from './settings-page';
-import { initIpDetails, loadPlaces, showDetails } from './ip-details';
+import { initIpDetails, loadPlaces, showDetails, openIpLookup } from './ip-details';
 import { findNear, nearList, renderNearList, renderNodeFinder } from './node-finder';
 import {
   initDiagnostics,
@@ -150,6 +150,7 @@ document.querySelector('#app')!.innerHTML = `
         </div>
       </div>
       <div class="header-actions">
+        <button id="ip-lookup" type="button">${icon('globe')}<span>IP 查询</span></button>
         <button id="theme-toggle" type="button" title="切换深浅色主题">
           ${icon('theme')}
           <span class="theme-label">${getTheme() === 'dark' ? '浅色' : '深色'}</span>
@@ -250,7 +251,7 @@ initSettings({
 
 initIpDetails({
   dialog,
-  call,
+  call: invoke,
   probeIp: id => state?.probes.find(p => p.id === id)?.ip || null,
   lockScroll: lockDialogScroll,
   rememberOpener: rememberDialogOpener,
@@ -488,6 +489,9 @@ document.addEventListener('click', async event => {
       return;
     }
     switch (b.id) {
+      case 'ip-lookup':
+        openIpLookup(b);
+        break;
       case 'test-ai':
         await call('test_ai_services');
         toast('Claude 与 Gemini 测试完成，结果已分别更新');

@@ -1513,6 +1513,11 @@ dialog::backdrop {
   margin-top: 2px;
 }
 
+.ip-lookup-controls { display: flex; gap: 10px; margin-top: 6px; }
+.ip-lookup-controls input { flex: 1; min-width: 0; width: 0; font-family: ui-monospace, Menlo, monospace; }
+.ip-lookup-controls button { flex-shrink: 0; }
+.ip-result-title { overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
+
 .geo-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

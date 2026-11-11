@@ -14,30 +14,69 @@ export interface DetailDeps {
   onGeoLoaded: () => void;
 }
 let deps: DetailDeps;
+let requestGeneration = 0;
 export function initIpDetails(d: DetailDeps) {
   deps = d;
+  d.dialog.addEventListener('close', () => { requestGeneration++; });
+}
+
+export function openIpLookup(trigger?: HTMLElement) {
+  const dialog = deps.dialog;
+  requestGeneration++;
+  delete dialog.dataset.ip;
+  document.querySelector('#detail-content')!.innerHTML = `
+    <div class="dialog-head">
+      <div><span class="eyebrow">IP INTELLIGENCE</span><h2>IP 查询</h2></div>
+      <button type="button" id="close-dialog">关闭</button>
+    </div>
+    <form id="ip-lookup-form">
+      <label for="ip-lookup-input">公网 IP 地址</label>
+      <div class="ip-lookup-controls">
+        <input id="ip-lookup-input" name="ip" type="text" required maxlength="45" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入 IPv4 或 IPv6 地址" aria-describedby="ip-lookup-hint">
+        <button type="submit" class="primary">查询</button>
+      </div>
+      <p id="ip-lookup-hint" class="small muted">支持 IPv4 和 IPv6；仅查询信息，不会加入监控或 IP 记录库。</p>
+    </form>
+    <section id="detail-result" aria-live="polite"><p class="muted">输入 IP，查看归属地、运营商、ASN、网络类型、时区与邮编。</p></section>`;
+  document.querySelector('#ip-lookup-form')!.addEventListener('submit', e => {
+    e.preventDefault();
+    const input = document.querySelector<HTMLInputElement>('#ip-lookup-input')!;
+    const ip = input.value.trim();
+    if (!ip) { input.value = ''; input.reportValidity(); return; }
+    void showIpDetails(ip);
+  });
+  if (!dialog.open) {
+    deps.rememberOpener(dialog, trigger);
+    deps.lockScroll();
+    dialog.showModal();
+  }
+  document.querySelector<HTMLInputElement>('#ip-lookup-input')!.focus();
 }
 
 export async function showDetails(id: string, force = false, trigger?: HTMLElement) {
-  const dialog = deps.dialog;
   const ip = deps.probeIp(id);
   if (!ip) return;
+  openIpLookup(trigger);
+  await showIpDetails(ip, force);
+}
+
+async function showIpDetails(ip: string, force = false) {
+  const dialog = deps.dialog;
+  const generation = ++requestGeneration;
+  const current = () => generation === requestGeneration && dialog.open;
   dialog.dataset.ip = ip;
-  if (!dialog.open) deps.rememberOpener(dialog, trigger);
-  document.querySelector('#detail-content')!.innerHTML = `
-    <div class="dialog-head">
-      <div>
-        <span class="eyebrow">IP INTELLIGENCE</span>
-        <h2>${esc(ip)}</h2>
-      </div>
-      <button type="button" id="close-dialog">关闭</button>
-    </div>
-    <p class="muted">正在查询位置、运营商与邮编…</p>`;
-  if (!dialog.open) { deps.lockScroll(); dialog.showModal(); }
+  document.querySelector<HTMLInputElement>('#ip-lookup-input')!.value = ip;
+  const result = document.querySelector<HTMLElement>('#detail-result')!;
+  if (result.contains(document.activeElement)) document.querySelector<HTMLInputElement>('#ip-lookup-input')!.focus();
+  result.setAttribute('aria-busy', 'true');
+  result.innerHTML = `<p class="muted">正在查询 ${esc(ip)} 的位置、运营商与邮编…</p>`;
   try {
     const g = await deps.call<Json>('lookup_geo', { ip, force });
+    if (!current()) return;
+    // The backend canonicalizes IPv6; nearby lookups must use that same cache key.
+    ip = g.ip || ip;
+    dialog.dataset.ip = ip;
     geoCache.set(ip, g);
-    if (dialog.dataset.ip !== ip || !dialog.open) return;
     const value = (x: unknown) => esc(x === null || x === undefined || x === '' ? '未提供' : x);
     const fields = [
       ['网络类型', g.network_type?.label],
@@ -66,15 +105,8 @@ export async function showDetails(id: string, force = false, trigger?: HTMLEleme
       ['经度', g.longitude],
       ['数据源', 'ipwho.is'],
     ];
-    const restoreFocus = dialog.contains(document.activeElement);
-    document.querySelector('#detail-content')!.innerHTML = `
-      <div class="dialog-head">
-        <div>
-          <div class="eyebrow">IP INTELLIGENCE</div>
-          <h2>${esc(ip)}</h2>
-        </div>
-        <button type="button" id="close-dialog">关闭</button>
-      </div>
+    result.innerHTML = `
+      <h3 class="ip-result-title">${esc(ip)}</h3>
       <p class="muted">此信息描述 IP 数据库中的出口位置，不能定位到你的真实住址。</p>
       <dl class="geo-grid">${fields.map(([k, v]) => `<div><dt>${k}</dt><dd>${value(v)}</dd></div>`).join('')}</dl>
       <div class="notice">
@@ -85,8 +117,7 @@ export async function showDetails(id: string, force = false, trigger?: HTMLEleme
       <p class="muted">自动以粗略坐标查询 10 公里范围内的公开图书馆地址。会向 OpenStreetMap Nominatim 发送坐标；结果可在原始地图核验。</p>
       <button type="button" id="nearby" class="primary">${icon('pin')}查询真实公开地点</button>
       <div id="places"></div>`;
-    document.querySelector('#refresh-ip-info')?.addEventListener('click', () => showDetails(id, true));
-    if (restoreFocus) document.querySelector<HTMLButtonElement>('#close-dialog')?.focus();
+    document.querySelector('#refresh-ip-info')?.addEventListener('click', () => showIpDetails(ip, true));
     deps.onGeoLoaded();
     document
       .querySelector('.geo-grid')!
@@ -99,16 +130,16 @@ export async function showDetails(id: string, force = false, trigger?: HTMLEleme
           'afterend',
           `<div class="map-actions"><span class="small muted">IP 粗略位置</span><button type="button" data-url="${esc(maps.amap)}">高德地图 ↗</button><button type="button" data-url="${esc(maps.google)}">Google 地图 ↗</button></div>`
         );
-    await loadPlaces(ip);
+    result.setAttribute('aria-busy', 'false');
+    await loadPlaces(ip, generation);
   } catch (e) {
-    if (dialog.dataset.ip === ip && dialog.open) {
-      const restoreFocus = dialog.contains(document.activeElement);
-      document.querySelector('#detail-content')!.innerHTML = `
-        <div class="dialog-head"><h2>详情暂不可用</h2><button type="button" id="close-dialog">关闭</button></div>
-        <p>${esc(String(e))}</p>
-        <p>出口 IP 检测仍继续。关闭后可稍后重试。</p>`;
-      if (restoreFocus) document.querySelector<HTMLButtonElement>('#close-dialog')?.focus();
+    if (current()) {
+      const restoreFocus = result.contains(document.activeElement);
+      result.innerHTML = `<h3>查询未成功 · ${esc(ip)}</h3><p class="warning" role="alert">${esc(String(e))}</p><p class="muted">请修改上方 IP 或稍后重试。</p>`;
+      if (restoreFocus) document.querySelector<HTMLInputElement>('#ip-lookup-input')?.focus();
     }
+  } finally {
+    if (current()) result.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -117,7 +148,7 @@ function placeButtons(p: Json) {
   return `<div class="map-actions">${links ? `<button type="button" data-url="${esc(links.amap)}">高德地图 ↗</button><button type="button" data-url="${esc(links.google)}">Google 地图 ↗</button>` : ''}<button type="button" data-url="${esc(p.url)}">OSM 来源 ↗</button></div>`;
 }
 
-export async function loadPlaces(ip: string) {
+export async function loadPlaces(ip: string, generation = requestGeneration) {
   const dialog = deps.dialog;
   const b = document.querySelector<HTMLButtonElement>('#nearby');
   if (!b) return;
@@ -127,7 +158,7 @@ export async function loadPlaces(ip: string) {
   if (e) e.innerHTML = '<p class="muted small">正在查询附近公开地点及当地邮编…</p>';
   try {
     const r = await deps.call<Json>('lookup_nearby', { ip });
-    if (dialog.dataset.ip !== ip || !dialog.open) return;
+    if (generation !== requestGeneration || dialog.dataset.ip !== ip || !dialog.open) return;
     const summary = document.querySelector('#address-summary');
     const first = r.places[0];
     if (summary)
@@ -144,7 +175,7 @@ export async function loadPlaces(ip: string) {
           .join('')}<p class="small muted">Google 地图或高德地图会接收所点击地点的坐标。海外地点在高德中的覆盖可能有限。</p>`
       : '<p>该区域未找到附完整街道门牌的公开地点。没有为缺失地址补写内容。</p>';
   } catch (e) {
-    if (dialog.dataset.ip === ip) {
+    if (generation === requestGeneration && dialog.dataset.ip === ip && dialog.open) {
       const summary = document.querySelector('#address-summary');
       if (summary) summary.innerHTML = '<p class="muted">附近地址暂不可用，下方仍可查看 IP 详情及数据库邮编。</p>';
       const p = document.querySelector('#places');
