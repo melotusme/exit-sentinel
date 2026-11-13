@@ -23,7 +23,7 @@ const POLL_SECONDS: f64 = 0.008;
 const SWALLOW_MS: u64 = 800;
 const RIGHT_BUTTON: usize = 1 << 1;
 
-static ON_RIGHT_CLICK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static ON_MENU_CLOSED: OnceLock<Box<dyn Fn(bool) + Send + Sync>> = OnceLock::new();
 static MENU_TRACKING: AtomicBool = AtomicBool::new(false);
 
 pub fn is_tracking() -> bool { MENU_TRACKING.load(Ordering::Relaxed) }
@@ -120,10 +120,8 @@ fn end(n: NonNull<NSNotification>) {
     if RIGHT_CLOSED_AT.load(Ordering::Relaxed) == 0 && right_button_involved(mtm) {
         RIGHT_CLOSED_AT.store(now_ms(), Ordering::Relaxed);
     }
-    if RIGHT_CLOSED_AT.load(Ordering::Relaxed) != 0 {
-        if let Some(f) = ON_RIGHT_CLICK.get() {
-            f();
-        }
+    if let Some(f) = ON_MENU_CLOSED.get() {
+        f(RIGHT_CLOSED_AT.load(Ordering::Relaxed) != 0);
     }
 }
 
@@ -133,9 +131,10 @@ pub fn swallow_item_event() -> bool {
     at != 0 && now_ms().saturating_sub(at) < SWALLOW_MS
 }
 
-/// Call once on the main thread. `on_right_click` runs on the main thread as the menu closes.
-pub fn install(on_right_click: impl Fn() + Send + Sync + 'static) {
-    if ON_RIGHT_CLICK.set(Box::new(on_right_click)).is_err() {
+/// Call once on the main thread. The callback runs after every root-menu close;
+/// its argument identifies a right-click acknowledgement.
+pub fn install(on_menu_closed: impl Fn(bool) + Send + Sync + 'static) {
+    if ON_MENU_CLOSED.set(Box::new(on_menu_closed)).is_err() {
         return;
     }
     let center = NSNotificationCenter::defaultCenter();

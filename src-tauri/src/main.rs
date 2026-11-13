@@ -1133,7 +1133,17 @@ fn main() {
             {
                 let handle = app.handle().clone();
                 let shared = s.clone();
-                tray_right_click::install(move || tray_menu::acknowledge_from_tray(&handle, &shared));
+                tray_right_click::install(move |right_click| {
+                    if right_click { tray_menu::acknowledge_from_tray(&handle, &shared); }
+                    // Apply deferred state even when monitoring was paused by this
+                    // menu. Wait until AppKit has unwound the native tracking loop.
+                    let handle = handle.clone();
+                    let shared = shared.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        refresh(&handle, &shared);
+                    });
+                });
             }
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
