@@ -13,7 +13,7 @@ use objc2_app_kit::{NSApplication, NSEvent, NSEventType, NSMenu, NSMenuDidBeginT
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSRunLoop, NSRunLoopCommonModes, NSTimer};
 use std::cell::RefCell;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,6 +24,10 @@ const SWALLOW_MS: u64 = 800;
 const RIGHT_BUTTON: usize = 1 << 1;
 
 static ON_RIGHT_CLICK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static MENU_TRACKING: AtomicBool = AtomicBool::new(false);
+
+pub fn is_tracking() -> bool { MENU_TRACKING.load(Ordering::Relaxed) }
+
 static RIGHT_CLOSED_AT: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
@@ -68,18 +72,22 @@ fn begin(n: NonNull<NSNotification>) {
     if !is_tray_root(&menu, mtm) {
         return;
     }
+    MENU_TRACKING.store(true, Ordering::Relaxed);
     RIGHT_CLOSED_AT.store(0, Ordering::Relaxed);
     let tick = RcBlock::new(|_timer: NonNull<NSTimer>| {
         if NSEvent::pressedMouseButtons() & RIGHT_BUTTON == 0 {
             return;
         }
-        TRACKING.with(|t| {
-            if let Some((menu, timer)) = t.borrow().as_ref() {
-                timer.invalidate();
-                RIGHT_CLOSED_AT.store(now_ms(), Ordering::Relaxed);
-                menu.cancelTracking();
-            }
-        });
+        // cancelTracking can synchronously deliver the end notification. Drop the
+        // RefCell borrow before calling AppKit, which re-enters `end`.
+        let menu = TRACKING.with(|t| t.borrow().as_ref().map(|(menu, timer)| {
+            timer.invalidate();
+            menu.clone()
+        }));
+        if let Some(menu) = menu {
+            RIGHT_CLOSED_AT.store(now_ms(), Ordering::Relaxed);
+            menu.cancelTracking();
+        }
     });
     let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(POLL_SECONDS, true, &tick) };
     // Common modes include the menu's event-tracking mode; the default mode does not run while open.
@@ -108,6 +116,7 @@ fn end(n: NonNull<NSNotification>) {
     if !ours {
         return;
     }
+    MENU_TRACKING.store(false, Ordering::Relaxed);
     if RIGHT_CLOSED_AT.load(Ordering::Relaxed) == 0 && right_button_involved(mtm) {
         RIGHT_CLOSED_AT.store(now_ms(), Ordering::Relaxed);
     }

@@ -2164,7 +2164,10 @@ summary { cursor: pointer; min-height: 28px; line-height: 28px; font-size: 13px;
   color: var(--text-secondary);
 }
 .settings-form { display: grid; gap: 18px; }
-.settings-links { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.settings-links { position: sticky; z-index: 7; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+.settings-links button { border: 0; background: transparent; padding: 10px 14px; color: var(--text); }
+.settings-links button.active, .settings-links button.active:hover:not(:disabled) { background: var(--primary); color: var(--on-primary); }
+.settings-stack [hidden] { display: none !important; }
 .settings-links a { color: var(--primary); text-underline-offset: 3px; }
 .settings-stack [id], .probe-panel { scroll-margin-top: 100px; }
 .settings-save-actions { margin: 0; }

@@ -116,7 +116,7 @@ pub fn macos_uplink(
     if wireless {
         up.ssid = if ssid.is_empty() { wifi_name(&up.interface).unwrap_or_default() } else { ssid };
         if up.ssid.is_empty() {
-            up.ssid_hint = "需要定位权限才能读取 Wi-Fi 名称".into();
+            up.ssid_hint = "Wi-Fi 名称暂不可用，请到设置 → 权限检查定位权限".into();
         }
     }
     up
@@ -134,12 +134,16 @@ pub fn current() -> Uplink {
     };
     let nwi = run("/usr/sbin/scutil", &["--nwi"]);
     let ports = hardware_ports(&run("/usr/sbin/networksetup", &["-listallhardwareports"]));
-    macos_uplink(
+    let mut up = macos_uplink(
         &nwi,
         &ports,
         |name| ipconfig_summary(&run("/usr/sbin/ipconfig", &["getsummary", name])),
         macos_wifi::ssid,
-    )
+    );
+    if up.medium == Medium::Wireless && up.ssid.is_empty() && wifi_permission_status() == "granted" {
+        up.ssid_hint = "已获定位权限，Wi-Fi 名称暂未返回".into();
+    }
+    up
 }
 
 /// CoreWLAN returns the SSID once Location Services allows this app; otherwise nil.
@@ -158,34 +162,168 @@ mod macos_wifi {
     }
 }
 
+/// Outcome of asking for the permission that unlocks the Wi-Fi name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiPermission {
+    /// The system prompt was shown.
+    Requested,
+    /// Already allowed; the next check reads the name.
+    Granted,
+    /// The user said no earlier; only System Settings can change it now.
+    Denied,
+    /// Location Services is switched off for the whole Mac.
+    ServicesOff,
+    /// No prompt exists on this system (Windows); the settings page was opened.
+    SettingsOnly,
+}
+
+impl WifiPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::ServicesOff => "services_off",
+            Self::SettingsOnly => "settings",
+        }
+    }
+
+    /// Whether the user has to finish the change in system settings.
+    pub fn needs_settings(self) -> bool {
+        matches!(self, Self::Denied | Self::ServicesOff | Self::SettingsOnly)
+    }
+
+    /// One line for a notification or toast.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Requested => "已弹出定位权限申请。点“允许”后会自动显示 Wi-Fi 名称；出口哨兵不读取也不保存你的位置。",
+            Self::Granted => "已有定位权限，正在重新读取 Wi-Fi 名称…",
+            Self::Denied => "定位权限之前被拒绝，系统不会再弹窗。已打开 系统设置 → 隐私与安全性 → 定位服务，请打开 Exit Sentinel 的开关。",
+            Self::ServicesOff => "这台 Mac 关闭了定位服务。已打开 系统设置 → 隐私与安全性 → 定位服务，请先打开总开关，再允许 Exit Sentinel。",
+            Self::SettingsOnly => "已打开系统定位设置。请打开“定位服务”和“允许桌面应用访问你的位置”，用于读取 Wi-Fi 名称。",
+        }
+    }
+}
+
+/// System Settings → Privacy & Security → Location Services (macOS), or Windows location privacy.
+pub const LOCATION_SETTINGS_URL: &str = if cfg!(target_os = "windows") {
+    "ms-settings:privacy-location"
+} else {
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
+};
+
+/// Whether this system has a location settings page worth linking to.
+pub const HAS_LOCATION_SETTINGS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// Open the location privacy page in system settings.
+pub fn open_location_settings() -> Result<(), String> {
+    if !HAS_LOCATION_SETTINGS {
+        return Err("此系统没有定位权限设置".into());
+    }
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = crate::command("cmd");
+        c.args(["/C", "start", "", LOCATION_SETTINGS_URL]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = crate::command("/usr/bin/open");
+        c.arg(LOCATION_SETTINGS_URL);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| format!("无法打开系统设置：{e}"))
+}
+
+/// Ask for the Wi-Fi name permission, and open system settings when a prompt can no longer
+/// help. Call on the main thread (macOS shows the prompt only from there).
+pub fn request_or_open_settings() -> Result<WifiPermission, String> {
+    let result = request_wifi_name_permission();
+    if result.needs_settings() {
+        open_location_settings()?;
+    }
+    Ok(result)
+}
+
+/// Read authorization without prompting or opening settings.
+#[cfg(target_os = "macos")]
+pub fn wifi_permission_status() -> &'static str {
+    use objc2_core_location::{CLAuthorizationStatus, CLLocationManager};
+    if !unsafe { CLLocationManager::locationServicesEnabled_class() } { return "services_off"; }
+    #[allow(deprecated)]
+    match unsafe { CLLocationManager::authorizationStatus_class() } {
+        CLAuthorizationStatus::NotDetermined => "not_determined",
+        CLAuthorizationStatus::Denied => "denied",
+        CLAuthorizationStatus::Restricted => "restricted",
+        _ => "granted",
+    }
+}
+#[cfg(target_os = "windows")]
+pub fn wifi_permission_status() -> &'static str { "settings" }
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn wifi_permission_status() -> &'static str { "not_required" }
+
 /// Ask once for Location Services so CoreWLAN may return the Wi-Fi name. macOS shows the
 /// prompt only while the status is "not determined"; afterwards the user changes it in
 /// System Settings → Privacy & Security → Location Services.
 #[cfg(target_os = "macos")]
-pub fn request_wifi_name_permission() -> &'static str {
+pub fn request_wifi_name_permission() -> WifiPermission {
     use objc2_core_location::{CLAuthorizationStatus, CLLocationManager};
-    use std::sync::OnceLock;
-    // The manager must outlive the prompt; keep one for the life of the process.
-    struct Keep(objc2::rc::Retained<CLLocationManager>);
-    unsafe impl Send for Keep {}
-    unsafe impl Sync for Keep {}
-    static MANAGER: OnceLock<Keep> = OnceLock::new();
-    let manager = &MANAGER.get_or_init(|| Keep(unsafe { CLLocationManager::new() })).0;
+    use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
+    use objc2::runtime::ProtocolObject;
+    use objc2_foundation::{NSObject, NSObjectProtocol};
+    use objc2_core_location::CLLocationManagerDelegate;
+    use std::cell::RefCell;
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "ExitSentinelLocationDelegate"]
+        #[thread_kind = MainThreadOnly]
+        struct LocationDelegate;
+        unsafe impl NSObjectProtocol for LocationDelegate {}
+        unsafe impl CLLocationManagerDelegate for LocationDelegate {
+            #[unsafe(method(locationManagerDidChangeAuthorization:))]
+            unsafe fn authorization_changed(&self, _manager: &CLLocationManager) {}
+        }
+    );
+    // Core Location requires a delegate before requesting authorization. Both weak
+    // delegate and manager must stay alive while the system prompt is displayed.
+    thread_local! {
+        static MANAGER: RefCell<Option<(objc2::rc::Retained<CLLocationManager>, objc2::rc::Retained<LocationDelegate>)>> = const { RefCell::new(None) };
+    }
+    let mtm = MainThreadMarker::new().expect("request Wi-Fi permission on the main thread");
+    if !unsafe { CLLocationManager::locationServicesEnabled_class() } {
+        return WifiPermission::ServicesOff;
+    }
+    let manager = MANAGER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let (manager, _) = slot.get_or_insert_with(|| unsafe {
+            let delegate: objc2::rc::Retained<LocationDelegate> = msg_send![mtm.alloc(), init];
+            let manager = CLLocationManager::new();
+            manager.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            (manager, delegate)
+        });
+        manager.clone()
+    });
     #[allow(deprecated)]
     let status = unsafe { CLLocationManager::authorizationStatus_class() };
     match status {
         CLAuthorizationStatus::NotDetermined => {
             unsafe { manager.requestWhenInUseAuthorization() };
-            "requested"
+            WifiPermission::Requested
         }
-        CLAuthorizationStatus::Denied | CLAuthorizationStatus::Restricted => "denied",
-        _ => "granted",
+        CLAuthorizationStatus::Denied | CLAuthorizationStatus::Restricted => WifiPermission::Denied,
+        _ => WifiPermission::Granted,
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn request_wifi_name_permission() -> &'static str {
-    "granted"
+#[cfg(target_os = "windows")]
+pub fn request_wifi_name_permission() -> WifiPermission {
+    WifiPermission::SettingsOnly
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn request_wifi_name_permission() -> WifiPermission {
+    WifiPermission::Granted
 }
 
 /// Linux: the device behind the default route, its type from sysfs, and the SSID from nmcli
@@ -350,6 +488,17 @@ mod tests {
         assert_eq!(up.label(), "无线 · Office-5G");
         let up = macos_uplink(nwi, &ports, |_| ("WiFi".into(), "Home".into()), |_| None);
         assert_eq!(up.ssid, "Home");
+    }
+
+    #[test]
+    fn wifi_permission_opens_settings_only_when_a_prompt_cannot_help() {
+        assert!(!WifiPermission::Requested.needs_settings());
+        assert!(!WifiPermission::Granted.needs_settings());
+        assert!(WifiPermission::Denied.needs_settings());
+        assert!(WifiPermission::ServicesOff.needs_settings());
+        assert!(WifiPermission::SettingsOnly.needs_settings());
+        #[cfg(target_os = "macos")]
+        assert!(LOCATION_SETTINGS_URL.ends_with("Privacy_LocationServices"));
     }
 
     #[test]

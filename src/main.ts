@@ -16,7 +16,7 @@ import {
   aiList, nodeList, routeList, routeRow, renderIpRecords, renderNodeRecords, populateNodeChoices,
   captureDrafts, restoreDrafts, clearDrafts, fillIp, fillNode, ipRecordRow, nodeRecordRow,
 } from './records';
-import { ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart, paintSettingsDraft } from './settings-page';
+import { selectSettingsSection, refreshPermissions, ignoreList, initSettings, permission, renderIgnoreList, renderSettings, setAutostart, settingsBusy, syncAutostart, paintSettingsDraft } from './settings-page';
 import { initIpDetails, loadPlaces, showDetails, openIpLookup } from './ip-details';
 import { findNear, nearList, renderNearList, renderNodeFinder } from './node-finder';
 import {
@@ -68,6 +68,13 @@ function readSub(t: string): string {
   } catch {}
   return options[0]?.[0] || '';
 }
+const wifiPermissionMessages: Record<string, string> = {
+  requested: '已弹出定位权限申请。点“允许”后会自动显示 Wi-Fi 名称；出口哨兵不读取也不保存你的位置。',
+  granted: '已有定位权限，正在重新读取 Wi-Fi 名称…',
+  denied: '定位权限之前被拒绝，系统不会再弹窗。已打开 系统设置 → 隐私与安全性 → 定位服务，请打开 Exit Sentinel 的开关。',
+  services_off: '这台 Mac 关闭了定位服务。已打开 系统设置 → 隐私与安全性 → 定位服务，请先打开总开关，再允许 Exit Sentinel。',
+  settings: '已打开系统定位设置。请打开“定位服务”和“允许桌面应用访问你的位置”，用于读取 Wi-Fi 名称。',
+};
 const initialMode = legacyModes[new URLSearchParams(location.search).get('mode') || ''] || ['overview'];
 let state: View | undefined,
   tab: Tab = initialMode[0];
@@ -421,9 +428,8 @@ document.addEventListener('click', async event => {
     if (b.dataset.settingsSection) {
       await switchTab('settings');
       if (tab === 'settings') {
-        const target = document.getElementById(b.dataset.settingsSection);
-        target?.scrollIntoView({ block: 'start' });
-        target?.focus({ preventScroll: true });
+        selectSettingsSection(b.dataset.settingsSection, true);
+        window.scrollTo({ top: 0 });
       }
       return;
     }
@@ -446,10 +452,13 @@ document.addEventListener('click', async event => {
     }
     if (b.id === 'wifi-name-permission') {
       const result = await invoke<string>('request_wifi_name');
-      toast(result === 'denied'
-        ? '定位权限已被拒绝。请到 系统设置 → 隐私与安全性 → 定位服务 中允许 Exit Sentinel，用于读取 Wi-Fi 名称。'
-        : result === 'requested' ? '已请求定位权限。允许后会自动显示 Wi-Fi 名称；出口哨兵不读取你的位置。'
-          : '已有定位权限，正在重新读取 Wi-Fi 名称…', result === 'denied');
+      toast(wifiPermissionMessages[result] || wifiPermissionMessages.granted, result === 'denied' || result === 'services_off');
+      void refreshPermissions();
+      return;
+    }
+    if (b.id === 'location-settings') {
+      await invoke('open_location_settings');
+      toast('已打开系统定位设置，请允许 Exit Sentinel 使用定位服务（只用于读取 Wi-Fi 名称）。');
       return;
     }
     if (b.id === 'theme-toggle') {

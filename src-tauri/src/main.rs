@@ -399,21 +399,24 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
             + &serde_json::to_string(&v.service_health).unwrap_or_default()
             + &serde_json::to_string(&v.verdicts).unwrap_or_default()
     );
-    {
-        let mut d = lock(s);
-        if d.tray_signature == signature {
-            return;
+    let app_handle = app.clone();
+    let shared = s.clone();
+    let _ = app.run_on_main_thread(move || {
+        // NSMenu tracking owns its native menu until it closes. Swapping it while
+        // open can dismiss it or detach the status item's active menu.
+        #[cfg(target_os = "macos")]
+        if tray_right_click::is_tracking() { return; }
+        if lock(&shared).tray_signature == signature { return; }
+        if let Some(tray) = app_handle.tray_by_id("sentinel") {
+            let _ = tray.set_icon(Some(tray_image(&v.status)));
+            let _ = tray.set_tooltip(Some(format!("出口哨兵 · {}", label(&v.status))));
+            if let Ok(menu) = tray_menu::build(&app_handle, &shared, &v, autostart, &geodata, &nearbydata) {
+                if tray.set_menu(Some(menu)).is_ok() {
+                    lock(&shared).tray_signature = signature;
+                }
+            }
         }
-        d.tray_signature = signature;
-    }
-    if let Some(tray) = app.tray_by_id("sentinel") {
-        let _ = tray.set_icon(Some(tray_image(&v.status)));
-        let _ = tray.set_tooltip(Some(format!("出口哨兵 · {}", label(&v.status))));
-        let menu = tray_menu::build(app, s, &v, autostart, &geodata, &nearbydata);
-        if let Ok(menu) = menu {
-            let _ = tray.set_menu(Some(menu));
-        }
-    }
+    });
 }
 fn copy_to_clipboard(value: &str) -> Result<(), String> {
     arboard::Clipboard::new()
@@ -534,18 +537,31 @@ fn acknowledge(app: tauri::AppHandle, s: tauri::State<Shared>) {
     clear_pending_changes(&mut lock(&s).view);
     refresh(&app, &s);
 }
-/// Ask macOS for the location permission that unlocks the Wi-Fi name. Returns
-/// "requested", "denied" or "granted".
+/// Ask for the location permission that unlocks the Wi-Fi name, opening system settings
+/// when the prompt can no longer appear. Returns "requested", "granted", "denied",
+/// "services_off" or "settings".
 #[tauri::command]
 async fn request_wifi_name(app: tauri::AppHandle, s: tauri::State<'_, Shared>) -> Result<String, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let _ = tx.send(link::request_wifi_name_permission());
+        let _ = tx.send(link::request_or_open_settings());
     })
     .map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|e| e.to_string())?;
+    let result = rx.await.map_err(|e| e.to_string())??;
     s.wake.notify_one();
-    Ok(result.into())
+    Ok(result.as_str().into())
+}
+#[tauri::command]
+async fn wifi_permission_status(app: tauri::AppHandle) -> Result<String, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || { let _ = tx.send(link::wifi_permission_status()); })
+        .map_err(|e| e.to_string())?;
+    rx.await.map(|status| status.to_string()).map_err(|e| e.to_string())
+}
+/// Open the system's location privacy page.
+#[tauri::command]
+fn open_location_settings() -> Result<(), String> {
+    link::open_location_settings()
 }
 #[tauri::command]
 fn set_paused(paused: bool, app: tauri::AppHandle, s: tauri::State<Shared>) {
@@ -1154,6 +1170,8 @@ fn main() {
             check_now,
             acknowledge,
             request_wifi_name,
+            open_location_settings,
+            wifi_permission_status,
             set_paused,
             save_settings,
             clear_history,

@@ -256,6 +256,9 @@ pub fn build(
     let menu = Menu::new(app)?;
     menu.append(&status)?;
     menu.append(&MenuItem::with_id(app, "uplink", uplink_title(v), false, None::<&str>)?)?;
+    if wifi_name_blocked(v) {
+        menu.append(&MenuItem::with_id(app, "wifi-permission", "　→ 允许读取 Wi-Fi 名称（申请定位权限）…", true, None::<&str>)?)?;
+    }
     if v.unacknowledged {
         let changes: Vec<String> = if !v.pending_changes.is_empty() {
             v.pending_changes.clone()
@@ -358,6 +361,15 @@ pub fn build(
     maintenance.append(&PredefinedMenuItem::separator(app)?)?;
     maintenance.append(&autostart_item)?;
     maintenance.append(&data_settings)?;
+    if crate::link::HAS_LOCATION_SETTINGS {
+        maintenance.append(&MenuItem::with_id(
+            app,
+            "location-settings",
+            "打开定位服务设置（Wi-Fi 名称）…",
+            true,
+            None::<&str>,
+        )?)?;
+    }
     maintenance.append(&MenuItem::with_id(
         app,
         "update",
@@ -389,6 +401,23 @@ pub fn site_detail(detail: &str, id: &str, gemini: &crate::claude::Monitor) -> S
         return detail.to_string();
     };
     if detail.is_empty() { region } else { format!("{detail} · {region}") }
+}
+
+/// On Wi-Fi, but the system withheld the network name because of location permission.
+pub fn wifi_name_blocked(v: &View) -> bool {
+    crate::link::HAS_LOCATION_SETTINGS
+        && v.uplink.medium == crate::link::Medium::Wireless
+        && v.uplink.ssid.is_empty()
+}
+
+/// Tray click on "允许读取 Wi-Fi 名称". Menu events arrive on the main thread, which is where
+/// macOS shows the location prompt.
+fn fix_wifi_name(app: &tauri::AppHandle, s: &Shared) {
+    match crate::link::request_or_open_settings() {
+        Ok(result) => notify(app, s, "出口哨兵 · Wi-Fi 名称", result.message()),
+        Err(error) => notify(app, s, "出口哨兵 · Wi-Fi 名称", &error),
+    }
+    s.wake.notify_one();
 }
 
 /// "出口链路 · 有线 · USB LAN" / "出口链路 · 无线 · HomeWiFi".
@@ -606,6 +635,12 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
         "update" => { show(app); let _ = app.emit_to("main", "check-update", ()); },
         "open" => show(app),
+        "wifi-permission" => fix_wifi_name(app, &s),
+        "location-settings" => {
+            if let Err(error) = crate::link::open_location_settings() {
+                notify(app, &s, "出口哨兵 · 定位设置", &error);
+            }
+        }
         "check" => s.wake.notify_one(),
         "ack" => {
             crate::clear_pending_changes(&mut lock(&s).view);

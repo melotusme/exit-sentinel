@@ -74,6 +74,11 @@ let auto: boolean | null = null,
   settingsSaving = false;
 export function initSettings(d: SettingsDeps) {
   deps = d;
+  const header = document.querySelector('.app-header');
+  if (header) new ResizeObserver(() => {
+    const nav = deps.content.querySelector<HTMLElement>('.settings-links');
+    if (nav) nav.style.top = `${header.getBoundingClientRect().height}px`;
+  }).observe(header);
 }
 export const settingsBusy = () => settingsSaving;
 export function setAutostart(value: boolean | null) {
@@ -81,10 +86,89 @@ export function setAutostart(value: boolean | null) {
   paintAutostart();
 }
 
+const SECTIONS = [
+  ['monitor-settings', '监控与通知'], ['routing-settings', '代理路径'],
+  ['permissions-settings', '权限'], ['system-settings', '系统启动'],
+  ['webdav-settings', '配置同步'], ['update-settings', '软件更新'], ['help-settings', '使用说明'],
+] as const;
+let section = 'monitor-settings';
+try { const saved = localStorage.getItem('sentinel.settings.section'); if (SECTIONS.some(([id]) => id === saved)) section = saved!; } catch {}
+
+export function selectSettingsSection(id: string, focus = false) {
+  if (!SECTIONS.some(([key]) => key === id)) return;
+  section = id;
+  try { localStorage.setItem('sentinel.settings.section', id); } catch {}
+  const root = deps.content;
+  root.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach(button => {
+    const active = button.dataset.settingsTab === id;
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+    button.classList.toggle('active', active);
+    if (active && focus) button.focus({ preventScroll: true });
+  });
+  for (const [key] of SECTIONS) {
+    const panel = root.querySelector<HTMLElement>(`#${key}`);
+    if (panel) {
+      panel.hidden = key !== id;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', `tab-${key}`);
+    }
+  }
+  const form = root.querySelector<HTMLFormElement>('#settings-form');
+  if (form) form.hidden = !['monitor-settings', 'routing-settings'].includes(id);
+  const nav = root.querySelector<HTMLElement>('.settings-links');
+  if (nav) nav.style.top = `${document.querySelector('.app-header')?.getBoundingClientRect().height || 80}px`;
+  if (id === 'permissions-settings') void refreshPermissions();
+}
+
+export async function refreshPermissions() {
+  const wifi = deps.content.querySelector('#wifi-permission-status');
+  const notification = deps.content.querySelector('#notification-permission-status');
+  if (!wifi || !notification) return;
+  const messages: Record<string, string> = {
+    granted: '已允许。若名称仍未显示，可刷新网络状态；这不代表权限被拒绝。',
+    not_determined: '尚未申请。点击“申请 Wi-Fi 名称权限”后，在系统弹窗中允许。',
+    denied: '已拒绝。系统不会重复弹窗，请在系统定位设置中允许 Exit Sentinel。',
+    restricted: '受系统策略限制，请检查屏幕使用时间或设备管理策略。',
+    services_off: '系统定位服务已关闭。请先打开总开关，再允许 Exit Sentinel。',
+    settings: '请在 Windows 定位设置中检查定位服务和桌面应用访问权限。',
+    not_required: '此系统无需申请定位权限；Wi-Fi 名称由系统网络服务提供。',
+  };
+  await Promise.all([
+    invoke<string>('wifi_permission_status').then(status => {
+      wifi.textContent = messages[status] || status;
+      deps.content.querySelectorAll<HTMLButtonElement>('#wifi-name-permission,#location-settings').forEach(button => { button.disabled = status === 'not_required'; });
+    })
+      .catch(error => { wifi.textContent = `读取失败：${String(error)}`; }),
+    isPermissionGranted().then(ok => { notification.textContent = ok ? '已允许（仍受勿扰模式和系统通知设置影响）。' : '尚未允许。点击“申请通知权限”；若曾拒绝，请到系统通知设置中开启。'; })
+      .catch(error => { notification.textContent = `读取失败：${String(error)}`; }),
+  ]);
+}
+window.setInterval(() => { if (deps?.isActive() && section === 'permissions-settings' && !document.hidden) void refreshPermissions(); }, 3000);
+window.addEventListener('focus', () => { if (deps?.isActive() && section === 'permissions-settings') void refreshPermissions(); });
+document.addEventListener('click', async event => {
+  const target = (event.target as HTMLElement).closest<HTMLElement>('[data-settings-tab],#refresh-permissions,#request-notifications');
+  if (!target || !deps?.isActive()) return;
+  if (target.dataset.settingsTab) { selectSettingsSection(target.dataset.settingsTab, true); window.scrollTo({ top: 0 }); }
+  else if (target.id === 'refresh-permissions') await refreshPermissions();
+  else {
+    try { await permission(); await refreshPermissions(); }
+    catch (error) { deps.toast(String(error), true); }
+  }
+});
+document.addEventListener('keydown', event => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>('[data-settings-tab]');
+  if (!button || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const index = SECTIONS.findIndex(([id]) => id === button.dataset.settingsTab);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? SECTIONS.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length;
+  selectSettingsSection(SECTIONS[next][0], true);
+});
+
 export function renderSettings(s: Settings) {
   deps.content.innerHTML = `
     <div class="settings-stack">
-      <nav class="settings-links" aria-label="设置分区"><a href="#monitor-settings">监控与通知</a><a href="#routing-settings">代理路径</a><a href="#system-settings">系统启动</a><a href="#webdav-settings">配置同步</a><a href="#update-settings">软件更新</a></nav>
+      <nav class="settings-links" role="tablist" aria-label="设置分区">${SECTIONS.map(([id, name]) => `<button type="button" role="tab" id="tab-${id}" aria-controls="${id}" data-settings-tab="${id}">${name}</button>`).join('')}</nav>
       <form id="settings-form" class="settings-form">
       <section id="monitor-settings" class="panel settings settings-card">
         <div class="card-header-block">
@@ -159,7 +243,7 @@ export function renderSettings(s: Settings) {
       </section>
         <div class="form-actions settings-save-actions">
           <button class="primary" type="submit">保存设置</button>
-          <button type="button" id="test-notification">发送测试通知</button>
+
         </div>
         <p id="permission" class="small muted status-note"></p>
       </form>
@@ -168,6 +252,21 @@ export function renderSettings(s: Settings) {
         <button type="button" id="restore-settings">还原修改</button>
         <button type="submit" form="settings-form" class="primary">保存监控与代理设置</button>
       </div>
+      <section id="permissions-settings" class="panel settings settings-card">
+        <h2>权限</h2>
+        <p class="muted">权限由操作系统管理。返回应用时自动刷新授权状态。</p>
+        <h3>Wi-Fi 名称 · 定位权限</h3>
+        <p>macOS 需要定位权限才能读取 Wi-Fi 名称。应用只读取网络名称，不请求位置坐标，也不保存位置。未授权不影响出口 IP 检测。</p>
+        <p id="wifi-permission-status" role="status">正在读取授权状态…</p>
+        <div class="form-actions"><button type="button" class="primary" id="wifi-name-permission">申请 Wi-Fi 名称权限</button><button type="button" id="location-settings">打开系统定位设置</button></div>
+        <p class="small muted">若升级后再次提示，请重新检查授权。本应用当前使用临时签名，macOS 可能将新版视为不同代码；稳定保留授权需要正式开发者签名。</p>
+        <div class="settings-divider"></div>
+        <h3>系统通知</h3>
+        <p id="notification-permission-status" role="status">正在读取授权状态…</p>
+        <div class="form-actions"><button type="button" id="request-notifications">申请通知权限</button><button type="button" id="test-notification">发送测试通知</button></div>
+        <div class="settings-divider"></div>
+        <button type="button" id="refresh-permissions">刷新权限状态</button>
+      </section>
       <section id="system-settings" class="panel settings settings-card">
         <h2>系统启动</h2>
         <label class="toggle">
@@ -177,8 +276,9 @@ export function renderSettings(s: Settings) {
       </section>
       ${syncSettings()}
       <section id="update-settings" class="panel settings settings-card">${updateSettings()}<p class="small muted">更新偏好立即生效，无需保存监控设置。</p></section>
-      ${renderGuide()}
+      <section id="help-settings">${renderGuide()}</section>
     </div>`;
+  selectSettingsSection(section);
   void loadSync();
   isPermissionGranted()
     .then(ok => {
@@ -293,6 +393,7 @@ document.addEventListener('change', async event => {
   }
 });
 
+window.setInterval(() => { if (deps?.isActive() && section === 'permissions-settings' && !document.hidden) void refreshPermissions(); }, 3000);
 window.addEventListener('focus', () => {
   if (deps.isActive()) void syncAutostart();
 });

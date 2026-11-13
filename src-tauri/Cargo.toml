@@ -1,6 +1,6 @@
 [package]
 name = "exit-sentinel"
-version = "0.7.3"
+version = "0.7.4"
 description = "A private macOS, Windows and Linux split-route egress monitor"
 edition = "2021"
 
@@ -39,4 +39,4 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSString", "NSNotification", "NSOperation", "NSTimer", "NSRunLoop", "NSDate", "NSObjCRuntime"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSResponder"] }
 objc2-core-wlan = { version = "0.3", default-features = false, features = ["std", "CWWiFiClient", "CWInterface"] }
-objc2-core-location = { version = "0.3", default-features = false, features = ["std", "CLLocationManager"] }
+objc2-core-location = { version = "0.3", default-features = false, features = ["std", "CLLocationManager", "CLLocationManagerDelegate"] }

@@ -146,7 +146,7 @@ function exitTile(v: View, group: string, title: string) {
   </article>`;
 }
 
-const isMac = /Mac/i.test(navigator.userAgent);
+const hasLocationSettings = /Mac|Windows/i.test(navigator.userAgent);
 
 /** Wired / Wi-Fi (with its name) under the default route, looked through any TUN / VPN. */
 export function uplinkChip(u: Uplink | undefined, network: string): string {
@@ -160,7 +160,10 @@ export function uplinkChip(u: Uplink | undefined, network: string): string {
     const name = u.ssid
       ? `<strong>无线</strong><span class="mono">${esc(u.ssid)}</span>`
       : `<strong>无线</strong><span class="muted">${esc(u.ssid_hint || 'Wi-Fi 名称未知')}</span>`;
-    const ask = !u.ssid && isMac ? '<button type="button" class="text-button compact" id="wifi-name-permission">允许读取 Wi-Fi 名称</button>' : '';
+    const ask = !u.ssid && hasLocationSettings
+      ? '<button type="button" class="text-button compact" id="wifi-name-permission" title="弹窗申请定位权限；之前拒绝过则直接打开系统设置">允许读取 Wi-Fi 名称</button>'
+        + '<button type="button" class="text-button compact" id="location-settings" title="系统设置 → 隐私与安全性 → 定位服务">打开定位设置</button>'
+      : '';
     return `<span class="uplink-chip wireless" title="${esc(device)}">${name}</span>${ask}`;
   }
   return `<span class="uplink-chip"><strong>未知类型</strong>${esc(device)}</span>`;
