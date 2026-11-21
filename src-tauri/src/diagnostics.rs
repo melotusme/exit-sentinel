@@ -139,13 +139,14 @@ fn execute_family(id: &str, name: &str, url: &str, proxy: &str, family: &str) ->
         "--url".into(),
         url.into(),
     ]);
-    let out = crate::command(if cfg!(target_os = "windows") {
-        "curl.exe"
-    } else {
-        "/usr/bin/curl"
-    })
-    .args(&args)
-    .output()
+    let out = crate::process_guard::output(
+        if cfg!(target_os = "windows") {
+            "curl.exe"
+        } else {
+            "/usr/bin/curl"
+        },
+        &args,
+    )
     .map_err(|e| format!("无法运行系统 curl：{e}"))?;
     let body = std::fs::read(&body_path).unwrap_or_default();
     let headers = std::fs::read(&header_path).unwrap_or_default();
@@ -189,6 +190,9 @@ pub fn show_popup(app: &tauri::AppHandle) {
     let _ = app.emit("open-diagnostics", ());
 }
 pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    if crate::shutdown::is_shutting_down() {
+        return Err("应用正在退出".into());
+    }
     let (id, family) = id.split_once('@').unwrap_or((id, "auto"));
     if !["auto", "4", "6"].contains(&family) { return Err("未知地址族".into()); }
     if id != "all" && id != "ai" && !SITES.iter().any(|s| s.0 == id) {
@@ -224,7 +228,14 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
         for &(site, name, url, group) in SITES.iter().filter(|s| {
             id == "all" || (id == "ai" && ["claude", "gemini"].contains(&s.0)) || s.0 == id
         }) {
-            if shared.0.lock().unwrap().generation != generation { return; }
+            {
+                let mut state = shared.0.lock().unwrap();
+                if state.generation != generation { return; }
+                if crate::shutdown::is_shutting_down() {
+                    state.running = false;
+                    return;
+                }
+            }
             let proxy = match group {
                 "domestic" => &settings.domestic_proxy,
                 "claude" => &settings.claude_proxy,
@@ -240,6 +251,10 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
             {
                 let mut state = shared.0.lock().unwrap();
                 if state.generation != generation { return; }
+                if crate::shutdown::is_shutting_down() {
+                    state.running = false;
+                    return;
+                }
                 match result {
                     Ok(Ok(report)) => {
                         state.reports.insert(key, report);
@@ -254,6 +269,7 @@ pub fn launch(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
             let mut state = shared.0.lock().unwrap();
             if state.generation != generation { return; }
             state.running = false;
+            if crate::shutdown::is_shutting_down() { return; }
         }
         publish(&app, &shared);
     });

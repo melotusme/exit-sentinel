@@ -61,6 +61,9 @@ fn records_signature(s: &Shared) -> String {
 /// the configured echo URL or Google's STUN server. A STUN answer equal to a domestic exit means
 /// UDP went out the local line, so it is not used.
 pub async fn observe_google(s: &Shared, settings: &crate::model::Settings, generation: u64) {
+    if crate::shutdown::is_shutting_down() {
+        return;
+    }
     let proxy = settings.gemini_proxy.as_str();
     let country = crate::google::judged_country(proxy);
     let (country, echo) = if settings.gemini_ip_url.is_empty() {
@@ -77,7 +80,13 @@ pub async fn observe_google(s: &Shared, settings: &crate::model::Settings, gener
         let ip = v4.ip.or(v6.ip).ok_or_else(|| v4.error.unwrap_or_else(|| "参考出口检测失败".into()));
         (country, ip.map(|ip| (ip, format!("参考出口：{}", settings.gemini_ip_url))))
     };
+    if crate::shutdown::is_shutting_down() {
+        return;
+    }
     let fresh = shadowrocket::selected_capture("gemini", proxy, settings.manual_nodes_only).await;
+    if crate::shutdown::is_shutting_down() {
+        return;
+    }
     let mut d = lock(s);
     if d.generation != generation || d.view.paused {
         return;
@@ -132,12 +141,21 @@ fn route_of(s: &Shared, service: &str) -> shadowrocket::RouteSnapshot {
 
 /// Probe one service and store the reading. Returns the reading for alert handling.
 async fn observe_exit(s: &Shared, service: &str, url: &str, proxy: &str, manual_only: bool, generation: u64) -> Option<(Probe, Probe, shadowrocket::RouteSnapshot)> {
+    if crate::shutdown::is_shutting_down() {
+        return None;
+    }
     let label = if service == "claude" { "claude.ai 同域名 trace" } else { "Gemini 参考出口检测" };
     let (v4, v6) = probe_pair(service, label, url, proxy).await;
+    if crate::shutdown::is_shutting_down() {
+        return None;
+    }
     // The snapshot taken right after the request is the best evidence. The cached one can be
     // up to a poll interval old (or empty at startup), so comparing against it would report
     // a node change that did not happen.
     let fresh = shadowrocket::selected_capture(service, proxy, manual_only).await;
+    if crate::shutdown::is_shutting_down() {
+        return None;
+    }
     let route = shadowrocket::correlate(&fresh, fresh.clone());
     let mut d = lock(s);
     if d.generation != generation || d.view.paused {
@@ -237,6 +255,9 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
     let mut alerts = Alerts::default();
     let mut previous_running = false;
     loop {
+        if !crate::shutdown::wait_until_active_or_exit().await {
+            break;
+        }
         let (paused, settings, generation, network) = {
             let d = lock(&s);
             (d.view.paused, d.view.settings.clone(), d.generation, d.view.network.clone())
@@ -244,10 +265,20 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
         if paused {
             alerts = Alerts::default();
             previous_running = false;
-            tokio::time::sleep(TICK).await;
+            tokio::select! {
+                biased;
+                _ = crate::shutdown::wait_for_shutdown() => {}
+                _ = tokio::time::sleep(TICK) => {}
+            }
+            continue;
+        }
+        if crate::shutdown::is_shutting_down() {
             continue;
         }
         let running = tokio::task::spawn_blocking(claude::running).await.unwrap_or_else(|e| Err(e.to_string()));
+        if crate::shutdown::is_shutting_down() {
+            continue;
+        }
         {
             let mut d = lock(&s);
             if d.generation != generation || d.view.paused {
@@ -270,11 +301,28 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
 
         let claude_path = |fp: String| format!("{}|{}|{}", settings.claude_proxy, network, fp);
         let every = if is_running { interval } else { interval.max(IDLE_RECHECK) };
-        if claude_watch.due(&claude_path(fingerprint("claude")), every, just_started) {
+        if !crate::shutdown::is_shutting_down()
+            && claude_watch.due(&claude_path(fingerprint("claude")), every, just_started)
+        {
             let records_before = records_signature(&s);
-            let observed = observe_exit(&s, "claude", CLAUDE_TRACE, &settings.claude_proxy, settings.manual_nodes_only, generation).await;
+            let observed = tokio::select! {
+                biased;
+                _ = crate::shutdown::wait_for_shutdown() => {
+                    claude_watch.retry_soon();
+                    continue;
+                }
+                o = observe_exit(&s, "claude", CLAUDE_TRACE, &settings.claude_proxy, settings.manual_nodes_only, generation) => o,
+            };
+            if crate::shutdown::is_shutting_down() {
+                claude_watch.retry_soon();
+                continue;
+            }
             // Re-check the process after the round trip; never alert for a closed app.
             let still_running = tokio::task::spawn_blocking(claude::running).await.ok().and_then(Result::ok) == Some(true);
+            if crate::shutdown::is_shutting_down() {
+                claude_watch.retry_soon();
+                continue;
+            }
             let ipv6_enabled = settings.ipv6 || settings.ipv6_required;
             let warning = match observed {
                 Some((v4, v6, route)) if still_running => claude_alerts(&s, &mut alerts, &v4, &v6, &route, ipv6_enabled),
@@ -283,7 +331,9 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
             if let Some(body) = &warning {
                 notify(&app, &s, "出口哨兵 · Claude 出口告警", body);
             }
-            if warning.is_some() || records_signature(&s) != records_before {
+            if (warning.is_some() || records_signature(&s) != records_before)
+                && !crate::shutdown::is_shutting_down()
+            {
                 persist(&s);
             }
             if alerts.failed_count == 1 {
@@ -294,16 +344,35 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
         }
 
         let gemini_path = |fp: String| format!("{}|{}|{}|{}", settings.gemini_proxy, settings.gemini_ip_url, network, fp);
-        if gemini_watch.due(&gemini_path(fingerprint("gemini")), interval.max(GOOGLE_RECHECK), false) {
+        if !crate::shutdown::is_shutting_down()
+            && gemini_watch.due(&gemini_path(fingerprint("gemini")), interval.max(GOOGLE_RECHECK), false)
+        {
             let records_before = records_signature(&s);
-            observe_google(&s, &settings, generation).await;
+            tokio::select! {
+                biased;
+                _ = crate::shutdown::wait_for_shutdown() => {
+                    gemini_watch.retry_soon();
+                    continue;
+                }
+                _ = observe_google(&s, &settings, generation) => {}
+            }
+            if crate::shutdown::is_shutting_down() {
+                gemini_watch.retry_soon();
+                continue;
+            }
             if records_signature(&s) != records_before {
                 persist(&s);
             }
             gemini_watch.settle(gemini_path(fingerprint("gemini")));
         }
-        refresh(&app, &s);
-        tokio::time::sleep(TICK).await;
+        if !crate::shutdown::is_shutting_down() {
+            refresh(&app, &s);
+        }
+        tokio::select! {
+            biased;
+            _ = crate::shutdown::wait_for_shutdown() => {}
+            _ = tokio::time::sleep(TICK) => {}
+        }
     }
 }
 

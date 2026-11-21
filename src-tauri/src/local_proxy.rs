@@ -174,10 +174,11 @@ fn sources(client: &str) -> Result<(Vec<String>, usize), String> {
     if client == "shadowrocket" {
         #[cfg(target_os = "macos")]
         {
-            let output = std::process::Command::new("/usr/bin/python3")
-                .args(["-I", "-c", include_str!("shadowrocket_nodes.py")])
-                .output()
-                .map_err(|_| "python_unavailable")?;
+            let output = crate::process_guard::output(
+                "/usr/bin/python3",
+                ["-I", "-c", include_str!("shadowrocket_nodes.py")],
+            )
+            .map_err(|_| "python_unavailable")?;
             if !output.status.success() || output.stdout.len() > proxy_import::LIMIT {
                 return Err("unreadable".into());
             }

@@ -69,9 +69,7 @@ pub fn running() -> Result<bool, String> {
 }
 #[cfg(target_os = "macos")]
 pub fn running() -> Result<bool, String> {
-    let out = crate::command("/bin/ps")
-        .args(["-axo", "comm="])
-        .output()
+    let out = crate::process_guard::output("/bin/ps", ["-axo", "comm="])
         .map_err(|e| format!("读取 Claude 进程失败：{e}"))?;
     if !out.status.success() {
         return Err("读取 Claude 进程失败".into());
@@ -336,10 +334,11 @@ mod tests {
 
 #[cfg(target_os = "windows")]
 pub fn running() -> Result<bool, String> {
-    let out = crate::command("tasklist.exe")
-        .args(["/FI", "IMAGENAME eq Claude.exe", "/FO", "CSV", "/NH"])
-        .output()
-        .map_err(|_| "无法读取 Windows Claude 进程")?;
+    let out = crate::process_guard::output(
+        "tasklist.exe",
+        ["/FI", "IMAGENAME eq Claude.exe", "/FO", "CSV", "/NH"],
+    )
+    .map_err(|_| "无法读取 Windows Claude 进程")?;
     if !out.status.success() {
         return Err("读取 Windows Claude 进程失败".into());
     }

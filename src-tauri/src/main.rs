@@ -13,9 +13,11 @@ mod local_proxy;
 mod model;
 mod net;
 mod node_finder;
+mod process_guard;
 mod proxy_import;
 mod region;
 mod shadowrocket;
+mod shutdown;
 mod sync;
 mod tray;
 mod tray_menu;
@@ -315,6 +317,9 @@ pub(crate) fn show(app: &tauri::AppHandle) {
 /// The Claude process heartbeat changes every few seconds; send it as a tiny event and
 /// push the full view only when business data changed.
 fn emit_state(app: &tauri::AppHandle, s: &Shared, v: &View) {
+    if shutdown::is_shutting_down() {
+        return;
+    }
     let key = {
         let mut stable = v.clone();
         stable.claude.checked.clear();
@@ -337,6 +342,9 @@ fn emit_state(app: &tauri::AppHandle, s: &Shared, v: &View) {
     }
 }
 fn refresh(app: &tauri::AppHandle, s: &Shared) {
+    if shutdown::is_shutting_down() {
+        return;
+    }
     let autostart = app.autolaunch().is_enabled().ok();
     let v = {
         let mut d = lock(s);
@@ -402,6 +410,9 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
     let app_handle = app.clone();
     let shared = s.clone();
     let _ = app.run_on_main_thread(move || {
+        if shutdown::is_shutting_down() {
+            return;
+        }
         // NSMenu tracking owns its native menu until it closes. Swapping it while
         // open can dismiss it or detach the status item's active menu.
         #[cfg(target_os = "macos")]
@@ -471,6 +482,9 @@ async fn cached_geo_scoped(s: &Shared, ip: &str, force: bool, expected: Option<u
     Ok(value)
 }
 fn load_tray_geography(app: tauri::AppHandle, s: Shared) {
+    if shutdown::is_shutting_down() {
+        return;
+    }
     let generation = lock(&s).generation;
     let ips = lock(&s)
         .view
@@ -480,15 +494,22 @@ fn load_tray_geography(app: tauri::AppHandle, s: Shared) {
         .collect::<std::collections::HashSet<_>>();
     tauri::async_runtime::spawn(async move {
         for ip in ips {
-            if lock(&s).generation != generation { break; }
-            if cached_geo_scoped(&s, &ip, false, Some(generation)).await.is_ok() {
+            if shutdown::is_shutting_down() || lock(&s).generation != generation {
+                break;
+            }
+            let result = tokio::select! {
+                biased;
+                _ = shutdown::wait_for_shutdown() => break,
+                r = cached_geo_scoped(&s, &ip, false, Some(generation)) => r,
+            };
+            if result.is_ok() && !shutdown::is_shutting_down() {
                 refresh(&app, &s);
             }
         }
     });
 }
 fn notify(app: &tauri::AppHandle, s: &Shared, title: &str, body: &str) {
-    if !lock(s).view.settings.notifications {
+    if shutdown::is_shutting_down() || !lock(s).view.settings.notifications {
         return;
     }
     let result = app.notification().builder().title(title).body(body).show();
@@ -799,8 +820,18 @@ async fn route_worker(app: tauri::AppHandle, s: Shared) {
     let mut last_run: Option<Instant> = None;
     let mut last_settings = String::new();
     loop {
+        if !shutdown::wait_until_active_or_exit().await {
+            break;
+        }
         if last_run.is_some() {
-            tokio::time::sleep(ROUTE_POLL_VISIBLE).await;
+            tokio::select! {
+                biased;
+                _ = shutdown::wait_for_shutdown() => continue,
+                _ = tokio::time::sleep(ROUTE_POLL_VISIBLE) => {}
+            }
+        }
+        if shutdown::is_shutting_down() {
+            continue;
         }
         let (settings, generation, paused) = {
             let d = lock(&s);
@@ -812,13 +843,20 @@ async fn route_worker(app: tauri::AppHandle, s: Shared) {
             || main_window_visible(&app)
             || last_run.map_or(true, |t| t.elapsed() >= hidden_wait);
         if !paused && due {
+            let targets = [
+                ("claude", settings.claude_proxy.as_str()),
+                ("gemini", settings.gemini_proxy.as_str()),
+            ];
+            let routes = tokio::select! {
+                biased;
+                _ = shutdown::wait_for_shutdown() => continue,
+                r = shadowrocket::selected_capture_many(&targets, settings.manual_nodes_only) => r,
+            };
+            if shutdown::is_shutting_down() {
+                continue;
+            }
             last_run = Some(Instant::now());
             last_settings = settings_key;
-            let routes = shadowrocket::selected_capture_many(
-                &[("claude", &settings.claude_proxy), ("gemini", &settings.gemini_proxy)],
-                settings.manual_nodes_only,
-            )
-            .await;
             let changed = {
                 let mut d = lock(&s);
                 if d.generation == generation
@@ -924,7 +962,18 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
     let mut last_probe = Instant::now() - Duration::from_secs(3600);
     let mut sampler = net::NetworkSampler::default();
     loop {
-        let force = tokio::select! {_ = s.wake.notified()=>true,_=tokio::time::sleep(Duration::from_secs(3))=>false};
+        if !shutdown::wait_until_active_or_exit().await {
+            break;
+        }
+        let force = tokio::select! {
+            biased;
+            _ = shutdown::wait_for_shutdown() => continue,
+            _ = s.wake.notified() => true,
+            _ = tokio::time::sleep(Duration::from_secs(3)) => false,
+        };
+        if shutdown::is_shutting_down() {
+            continue;
+        }
         if lock(&s).view.paused {
             services = connectivity::Monitor::default();
             continue;
@@ -933,10 +982,19 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
         let quick = tokio::task::spawn_blocking(net::quick_signature)
             .await
             .unwrap_or_default();
+        if shutdown::is_shutting_down() {
+            continue;
+        }
         let network = if sampler.full_due(&quick, force) {
+            if shutdown::is_shutting_down() {
+                continue;
+            }
             let (full, uplink) = tokio::task::spawn_blocking(|| (net::network_snapshot(), link::current()))
                 .await
                 .unwrap_or_default();
+            if shutdown::is_shutting_down() {
+                continue;
+            }
             // The Wi-Fi name is part of the snapshot so switching networks is recorded.
             let full = format!("出口链路\n{}\n\n{full}", uplink.label());
             sampler.record_full(&full);
@@ -962,8 +1020,11 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
                     .unwrap_or(false)
             }
         };
-        if network_change {
+        if network_change && !shutdown::is_shutting_down() {
             persist(&s);
+        }
+        if shutdown::is_shutting_down() {
+            continue;
         }
         let (settings, probes, generation) = {
             let mut d = lock(&s);
@@ -987,7 +1048,18 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
             };
             net::run_probe(p, proxy)
         });
-        let (results, health) = tokio::join!(futures::future::join_all(jobs), connectivity::check_all(&settings));
+        let (results, health) = tokio::select! {
+            biased;
+            _ = shutdown::wait_for_shutdown() => {
+                lock(&s).view.checking = false;
+                continue;
+            }
+            res = async { tokio::join!(futures::future::join_all(jobs), connectivity::check_all(&settings)) } => res,
+        };
+        if shutdown::is_shutting_down() {
+            lock(&s).view.checking = false;
+            continue;
+        }
         let (history_lines, notify_lines) = {
             let mut d = lock(&s);
             d.view.checking = false;
@@ -1007,23 +1079,13 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
         if !notify_lines.is_empty() {
             notify(&app, &s, "出口哨兵 · 网络与服务告警", &notify_lines.join("\n"));
         }
-        if !history_lines.is_empty() {
+        if !history_lines.is_empty() && !shutdown::is_shutting_down() {
             persist(&s);
         }
         last_probe = Instant::now();
         refresh(&app, &s);
         load_tray_geography(app.clone(), s.clone());
     }
-}
-fn command(program: &str) -> std::process::Command {
-    #[allow(unused_mut)]
-    let mut cmd = std::process::Command::new(program);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-    cmd
 }
 fn main() {
     // WebKitGTK's DMA-BUF renderer shows a blank window on many Wayland/NVIDIA setups
@@ -1048,6 +1110,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(autostart.arg("--autostart").build())
         .setup(move |app| {
+            shutdown::install();
             let path = app.path().app_data_dir()?;
             let (mut saved, load_error) = match std::fs::read(path.join("settings.json")) {
                 Ok(b) => match serde_json::from_slice::<Saved>(&b) {
@@ -1159,8 +1222,10 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if !shutdown::is_shutting_down() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1203,9 +1268,17 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("无法启动出口哨兵")
         .run(|handle, event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                show(handle);
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    shutdown::begin_exit();
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    show(handle);
+                }
+                _ => {
+                    let _ = handle;
+                }
             }
         });
 }

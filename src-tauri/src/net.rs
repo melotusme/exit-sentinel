@@ -144,9 +144,7 @@ pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
     p
 }
 fn output(bin: &str, args: &[&str]) -> String {
-    crate::command(bin)
-        .args(args)
-        .output()
+    crate::process_guard::output(bin, args)
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

@@ -125,9 +125,7 @@ pub fn macos_uplink(
 #[cfg(target_os = "macos")]
 pub fn current() -> Uplink {
     let run = |bin: &str, args: &[&str]| {
-        crate::command(bin)
-            .args(args)
-            .output()
+        crate::process_guard::output(bin, args)
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
@@ -221,18 +219,10 @@ pub fn open_location_settings() -> Result<(), String> {
         return Err("此系统没有定位权限设置".into());
     }
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = crate::command("cmd");
-        c.args(["/C", "start", "", LOCATION_SETTINGS_URL]);
-        c
-    };
+    let result = crate::process_guard::spawn_detached("cmd", ["/C", "start", "", LOCATION_SETTINGS_URL]);
     #[cfg(not(target_os = "windows"))]
-    let mut cmd = {
-        let mut c = crate::command("/usr/bin/open");
-        c.arg(LOCATION_SETTINGS_URL);
-        c
-    };
-    cmd.spawn().map(|_| ()).map_err(|e| format!("无法打开系统设置：{e}"))
+    let result = crate::process_guard::spawn_detached("/usr/bin/open", [LOCATION_SETTINGS_URL]);
+    result.map_err(|e| format!("无法打开系统设置：{e}"))
 }
 
 /// Ask for the Wi-Fi name permission, and open system settings when a prompt can no longer
@@ -331,9 +321,7 @@ pub fn request_wifi_name_permission() -> WifiPermission {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn current() -> Uplink {
     let run = |bin: &str, args: &[&str]| {
-        crate::command(bin)
-            .args(args)
-            .output()
+        crate::process_guard::output(bin, args)
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -396,9 +384,7 @@ pub fn linux_nmcli_ssid(text: &str, interface: &str) -> String {
 #[cfg(target_os = "windows")]
 pub fn current() -> Uplink {
     let run = |bin: &str, args: &[&str]| {
-        crate::command(bin)
-            .args(args)
-            .output()
+        crate::process_guard::output(bin, args)
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()

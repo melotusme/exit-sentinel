@@ -142,10 +142,9 @@ pub async fn selected_capture(service: &str, proxy: &str, manual_only: bool) -> 
 async fn read_snapshots(services: Vec<String>) -> Vec<Result<RouteSnapshot, String>> {
     let count = services.len();
     let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("/usr/bin/python3")
-            .args(["-I", "-c", include_str!("shadowrocket_snapshot.py")])
-            .args(&services)
-            .output()
+        let mut args = vec!["-I", "-c", include_str!("shadowrocket_snapshot.py")];
+        args.extend(services.iter().map(String::as_str));
+        crate::process_guard::output("/usr/bin/python3", args)
             .map_err(|_| "无法启动本机 Python 3 读取 Shadowrocket 元数据".to_string())
             .and_then(|o| {
                 if !o.status.success() || o.stdout.len() > 65536 * count {

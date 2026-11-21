@@ -539,11 +539,14 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     }
     let s = app.state::<Shared>();
     if let Some(id) = event.id.as_ref().strip_prefix("ai-node-mark:") {
+        if crate::shutdown::is_shutting_down() { return; }
         let parts: Vec<_> = id.splitn(3, ':').map(String::from).collect();
         if parts.len() == 3 {
             let app = app.clone(); let shared = s.inner().clone();
             tauri::async_runtime::spawn(async move {
+                if crate::shutdown::is_shutting_down() { return; }
                 let result = match parse_safety(&parts[1]) { Ok(status) => mark_node(&shared, &parts[0], &parts[2], status, None, true).await, Err(e) => Err(e) };
+                if crate::shutdown::is_shutting_down() { return; }
                 let message = result.map(|_| "节点状态已保存（无需 IP）".to_string()).unwrap_or_else(|e| e);
                 let _ = app.emit("ai-status-saved", &message);
                 notify(&app, &shared, "出口哨兵 · 节点登记", &message);
@@ -558,9 +561,12 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         let _ = app.emit("ai-status-saved", message); return;
     }
     if event.id.as_ref() == "ai-test" {
+        if crate::shutdown::is_shutting_down() { return; }
         let app = app.clone(); let shared = s.inner().clone();
         tauri::async_runtime::spawn(async move {
+            if crate::shutdown::is_shutting_down() { return; }
             let result = run_ai_tests(app.clone(), shared.clone()).await;
+            if crate::shutdown::is_shutting_down() { return; }
             let body = match result {
                 Err(e) => e,
                 Ok(()) => lock(&shared).view.ai_tests.iter().map(|t| format!("{}：{} · IPv4 {} · IPv6 {}", t.service, t.http_code.map(|c| format!("HTTP {c}")).unwrap_or_else(|| "连接失败".into()), t.ip.as_deref().unwrap_or("未确认"), t.ipv6.as_deref().unwrap_or("未确认"))).collect::<Vec<_>>().join("\n"),
@@ -658,7 +664,10 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             refresh(app, &s);
             s.wake.notify_one();
         }
-        "quit" => app.exit(0),
+        "quit" => {
+            crate::shutdown::begin_exit();
+            app.exit(0);
+        }
         _ => {}
     }
 }

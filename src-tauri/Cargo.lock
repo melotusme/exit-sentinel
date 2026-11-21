@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "exit-sentinel"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "aes-gcm",
  "arboard",
@@ -1171,6 +1171,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

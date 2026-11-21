@@ -1,6 +1,6 @@
 [package]
 name = "exit-sentinel"
-version = "0.7.4"
+version = "0.7.5"
 description = "A private macOS, Windows and Linux split-route egress monitor"
 edition = "2021"
 
@@ -40,3 +40,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSResponder"] }
 objc2-core-wlan = { version = "0.3", default-features = false, features = ["std", "CWWiFiClient", "CWInterface"] }
 objc2-core-location = { version = "0.3", default-features = false, features = ["std", "CLLocationManager", "CLLocationManagerDelegate"] }
+
+# Windows: session shutdown hook (WM_QUERYENDSESSION / WM_ENDSESSION), console ctrl handler, and Job Objects.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
