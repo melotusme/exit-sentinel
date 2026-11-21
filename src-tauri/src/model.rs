@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Settings {
@@ -17,6 +21,12 @@ pub struct Settings {
     pub foreign_proxy: String,
     /// Checks the user chose to ignore: they still run and show, but never mark the status abnormal.
     pub ignored_checks: Vec<String>,
+    /// Per-device automatic update check preference (excluded from WebDAV sync).
+    #[serde(default = "default_true")]
+    pub auto_update_check: bool,
+    /// Per-device automatic silent install preference (excluded from WebDAV sync).
+    #[serde(default = "default_true")]
+    pub auto_update_install: bool,
 }
 /// Checks that can be ignored, as (id, label). Sites are `site:<id>`, exit probes `probe:<id>`.
 pub const IGNORABLE_CHECKS: &[(&str, &str)] = &[
@@ -45,6 +55,8 @@ impl Default for Settings {
             domestic_proxy: String::new(),
             foreign_proxy: String::new(),
             ignored_checks: Vec::new(),
+            auto_update_check: true,
+            auto_update_install: true,
         }
     }
 }
@@ -286,5 +298,22 @@ mod tests {
         s.foreign_proxy.clear();
         s.interval = 0;
         assert!(s.validate().is_err());
+    }
+    #[test]
+    fn update_settings_default_on_and_backwards_compatible() {
+        let d = Settings::default();
+        assert!(d.auto_update_check);
+        assert!(d.auto_update_install);
+        // Legacy settings.json without update fields defaults both to true.
+        let legacy: Settings = serde_json::from_str(r#"{"interval":45}"#).unwrap();
+        assert_eq!(legacy.interval, 45);
+        assert!(legacy.auto_update_check);
+        assert!(legacy.auto_update_install);
+        // Explicit false values are respected.
+        let disabled: Settings =
+            serde_json::from_str(r#"{"auto_update_check":false,"auto_update_install":false}"#)
+                .unwrap();
+        assert!(!disabled.auto_update_check);
+        assert!(!disabled.auto_update_install);
     }
 }

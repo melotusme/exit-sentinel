@@ -346,6 +346,10 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         return;
     }
     let autostart = app.autolaunch().is_enabled().ok();
+    let update_summary = app
+        .try_state::<updates::State>()
+        .map(|u| u.tray_summary())
+        .unwrap_or_default();
     let v = {
         let mut d = lock(s);
         let view = &mut d.view;
@@ -406,6 +410,13 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
             + &serde_json::to_string(&v.ai_nodes).unwrap_or_default()
             + &serde_json::to_string(&v.service_health).unwrap_or_default()
             + &serde_json::to_string(&v.verdicts).unwrap_or_default()
+            + &format!(
+                ":{}:{}:{}:{:?}",
+                v.settings.auto_update_check,
+                v.settings.auto_update_install,
+                update_summary.phase,
+                update_summary.latest_version
+            )
     );
     let app_handle = app.clone();
     let shared = s.clone();
@@ -421,7 +432,7 @@ fn refresh(app: &tauri::AppHandle, s: &Shared) {
         if let Some(tray) = app_handle.tray_by_id("sentinel") {
             let _ = tray.set_icon(Some(tray_image(&v.status)));
             let _ = tray.set_tooltip(Some(format!("出口哨兵 · {}", label(&v.status))));
-            if let Ok(menu) = tray_menu::build(&app_handle, &shared, &v, autostart, &geodata, &nearbydata) {
+            if let Ok(menu) = tray_menu::build(&app_handle, &shared, &v, autostart, &update_summary, &geodata, &nearbydata) {
                 if tray.set_menu(Some(menu)).is_ok() {
                     lock(&shared).tray_signature = signature;
                 }
@@ -600,7 +611,7 @@ fn set_paused(paused: bool, app: tauri::AppHandle, s: tauri::State<Shared>) {
 }
 #[tauri::command]
 fn save_settings(
-    settings: Settings,
+    mut settings: Settings,
     app: tauri::AppHandle,
     s: tauri::State<Shared>,
 ) -> Result<(), String> {
@@ -608,6 +619,10 @@ fn save_settings(
     {
         let mut d = lock(&s);
         let old = d.view.settings.clone();
+        // Update preferences apply immediately via `set_update_settings` and tray menu;
+        // preserve them here so saving monitoring/proxy settings never clobbers a concurrent toggle.
+        settings.auto_update_check = old.auto_update_check;
+        settings.auto_update_install = old.auto_update_install;
         if old.claude_proxy != settings.claude_proxy
             || old.gemini_proxy != settings.gemini_proxy
             || old.gemini_ip_url != settings.gemini_ip_url
@@ -813,6 +828,11 @@ const ROUTE_POLL_VISIBLE: Duration = Duration::from_secs(5);
 const ROUTE_POLL_HIDDEN_MIN: Duration = Duration::from_secs(30);
 fn main_window_visible(app: &tauri::AppHandle) -> bool {
     app.get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+fn diagnostics_window_visible(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window("diagnostics")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false)
 }
@@ -1140,6 +1160,15 @@ fn main() {
             if !saved.settings.retain_history {
                 saved.history.clear();
             }
+            let current_version = app.package_info().version.to_string();
+            let silent_relaunch = updates::consume_silent_relaunch(&path, &current_version);
+            let updated_from = silent_relaunch.updated_from.clone();
+            app.state::<updates::State>().initialize(
+                app.handle(),
+                path.clone(),
+                &saved.settings,
+                updated_from.clone(),
+            );
             let s = Shared {
                 path,
                 geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
@@ -1184,6 +1213,23 @@ fn main() {
                     nearby_attempt: None,
                 })),
             };
+            if let Some(from) = updated_from {
+                let retain = {
+                    let mut d = lock(&s);
+                    let retain = d.view.settings.retain_history;
+                    if retain {
+                        push_event(
+                            &mut d,
+                            "软件已静默更新",
+                            &format!("已在后台从 v{from} 自动更新至 v{current_version}"),
+                        );
+                    }
+                    retain
+                };
+                if retain {
+                    persist(&s);
+                }
+            }
             app.manage(s.clone());
             app.manage(diagnostics::Shared::default());
             TrayIconBuilder::with_id("sentinel")
@@ -1210,7 +1256,7 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            if !std::env::args().any(|arg| arg == "--autostart") {
+            if !std::env::args().any(|arg| arg == "--autostart") && !silent_relaunch.keep_hidden {
                 show(app.handle());
             }
             refresh(app.handle(), &s);
@@ -1218,6 +1264,7 @@ fn main() {
             tauri::async_runtime::spawn(route_worker(app.handle().clone(), s.clone()));
             tauri::async_runtime::spawn(exit_worker::run(app.handle().clone(), s.clone()));
             tauri::async_runtime::spawn(worker(app.handle().clone(), s));
+            updates::spawn_worker(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1225,6 +1272,9 @@ fn main() {
                 if !shutdown::is_shutting_down() {
                     api.prevent_close();
                     let _ = window.hide();
+                    if window.label() == "main" {
+                        updates::on_main_window_hidden(window.app_handle());
+                    }
                 }
             }
         })
@@ -1233,6 +1283,8 @@ fn main() {
             sync::save_sync_config,
             sync::import_verge_webdav,
             sync::sync_action,
+            updates::get_update_status,
+            updates::set_update_settings,
             updates::check_update,
             updates::install_update,
             get_state,

@@ -12,6 +12,35 @@ export interface Settings {
   domestic_proxy: string;
   foreign_proxy: string;
   ignored_checks: string[];
+  auto_update_check: boolean;
+  auto_update_install: boolean;
+}
+
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'verifying'
+  | 'ready_deferred'
+  | 'installing'
+  | 'error';
+
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  received: number;
+  total: number | null;
+  lastCheckedAt: number | null;
+  lastUpdatedFrom: string | null;
+  error: string | null;
+  errorIsManual: boolean;
+  canSilentInstall: boolean;
+  silentBlockedReason: string | null;
+  autoUpdateCheck: boolean;
+  autoUpdateInstall: boolean;
 }
 export interface Probe {
   id: string;

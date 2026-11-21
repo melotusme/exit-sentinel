@@ -1424,6 +1424,11 @@ select {
   transform: translateX(20px);
 }
 
+.toggle.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .toggle input[type="checkbox"]:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1952,12 +1957,146 @@ dialog h3 {
   flex-wrap: wrap;
 }
 
+.update-banner-body {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.update-banner.is-ready {
+  border-color: var(--success-border);
+  border-left-color: var(--green);
+}
+
+.update-banner.is-error {
+  border-color: var(--danger-border);
+  border-left-color: var(--danger);
+  background: var(--danger-tonal);
+  color: var(--text);
+}
+
+.update-banner.is-error strong {
+  color: var(--danger);
+}
+
 .update-notes {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 180px;
   overflow: auto;
   margin-top: 5px !important;
+}
+
+.update-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+
+.update-meta-cell {
+  background: var(--surface-variant);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  min-width: 0;
+}
+
+.update-note-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--surface-variant);
+}
+
+.update-note-box.is-success,
+.update-note-box.is-ready {
+  border-color: var(--success-border);
+  border-left-color: var(--green);
+  background: var(--success-tonal);
+}
+
+.update-note-box.is-progress {
+  display: block;
+}
+
+.update-note-box p {
+  margin: 4px 0 0;
+}
+
+.update-note-content {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.update-note-box .form-actions {
+  margin-top: 0;
+}
+
+.update-progress-track {
+  position: relative;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 0.2s ease;
+}
+
+.update-progress-track.is-indeterminate .update-progress-fill {
+  width: 36%;
+  animation: update-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes update-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.update-warning {
+  margin: 0 0 12px;
+}
+
+.update-error-box {
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--danger-border);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-tonal);
+}
+
+.update-error-head strong {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.update-error-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.update-error-box .form-actions {
+  margin-top: 10px;
 }
 
 #software-update .notice {
@@ -2108,7 +2247,7 @@ summary { cursor: pointer; min-height: 28px; line-height: 28px; font-size: 13px;
   .probe-target small { overflow-wrap: anywhere; }
   .exit-header,.exit-ip-wrap,.panel-header { flex-wrap: wrap; gap: 10px; }
   .ip { font-size: clamp(18px,5vw,28px); overflow-wrap: anywhere; }
-  .geo-grid { grid-template-columns: minmax(0,1fr); }
+  .geo-grid, .update-meta-grid { grid-template-columns: minmax(0,1fr); }
   .timeline-header { flex-wrap: wrap; }
   dialog { width: calc(100% - 24px); max-height: calc(100dvh - 24px); padding: 20px; }
   #toast { left: 50%; max-width: calc(100% - 32px); width: max-content; }

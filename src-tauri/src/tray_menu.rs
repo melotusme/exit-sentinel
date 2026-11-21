@@ -14,6 +14,7 @@ pub fn build(
     s: &Shared,
     v: &View,
     autostart: Option<bool>,
+    update_summary: &crate::updates::TrayUpdateSummary,
     geodata: &BTreeMap<String, Value>,
     nearbydata: &BTreeMap<String, Value>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
@@ -253,6 +254,14 @@ pub fn build(
         autostart.unwrap_or(false),
         None::<&str>,
     )?;
+    let auto_silent_item = CheckMenuItem::with_id(
+        app,
+        "auto-silent-update",
+        "自动静默更新",
+        true,
+        v.settings.auto_update_check && v.settings.auto_update_install,
+        None::<&str>,
+    )?;
     let menu = Menu::new(app)?;
     menu.append(&status)?;
     menu.append(&MenuItem::with_id(app, "uplink", uplink_title(v), false, None::<&str>)?)?;
@@ -360,6 +369,7 @@ pub fn build(
     maintenance.append(&pause)?;
     maintenance.append(&PredefinedMenuItem::separator(app)?)?;
     maintenance.append(&autostart_item)?;
+    maintenance.append(&auto_silent_item)?;
     maintenance.append(&data_settings)?;
     if crate::link::HAS_LOCATION_SETTINGS {
         maintenance.append(&MenuItem::with_id(
@@ -370,10 +380,21 @@ pub fn build(
             None::<&str>,
         )?)?;
     }
+    let update_label = match (
+        update_summary.phase.as_str(),
+        update_summary.latest_version.as_deref(),
+    ) {
+        ("ready_deferred", Some(ver)) => format!("安装已就绪的更新 v{ver} 并重启…"),
+        ("available", Some(ver)) => format!("发现新版本 v{ver}（点击更新）…"),
+        ("checking", _) => "正在检查软件更新…".into(),
+        ("downloading" | "verifying" | "installing", _) => "正在下载或安装软件更新…".into(),
+        ("error", _) => "软件更新失败（点击查看）…".into(),
+        _ => "检查软件更新…".into(),
+    };
     maintenance.append(&MenuItem::with_id(
         app,
         "update",
-        "检查软件更新…",
+        update_label,
         true,
         None::<&str>,
     )?)?;
@@ -639,7 +660,37 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app.emit("autostart-error", error);
             }
         }
-        "update" => { show(app); let _ = app.emit_to("main", "check-update", ()); },
+        "auto-silent-update" => {
+            let currently_silent = {
+                let d = lock(&s);
+                d.view.settings.auto_update_check && d.view.settings.auto_update_install
+            };
+            let (next_check, next_install) = if currently_silent {
+                (true, false)
+            } else {
+                (true, true)
+            };
+            if let Err(error) = crate::updates::apply_update_settings(
+                next_check,
+                next_install,
+                app,
+                &s,
+                &app.state::<crate::updates::State>(),
+            ) {
+                show(app);
+                let _ = app.emit("ai-status-saved", error);
+            }
+        }
+        "update" => {
+            show(app);
+            let status = app.state::<crate::updates::State>().status_snapshot();
+            if status.phase == "idle" {
+                let _ = app.emit_to("main", "check-update", ());
+            } else {
+                let _ = app.emit_to("main", "open-update-settings", ());
+                let _ = app.emit_to("main", "update-status", status);
+            }
+        }
         "open" => show(app),
         "wifi-permission" => fix_wifi_name(app, &s),
         "location-settings" => {

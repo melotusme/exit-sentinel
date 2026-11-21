@@ -4,7 +4,7 @@ import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notif
 import { confirmAction } from './confirm';
 import { renderGuide } from './guide';
 import { loadSync, syncSettings } from './sync';
-import { updateSettings } from './updater';
+import { getUpdatePreferences, refreshUpdateStatus, updateSettings } from './updater';
 import { esc } from './ui';
 import { ListView } from './list';
 import { refreshSearchSelects } from './select';
@@ -119,6 +119,7 @@ export function selectSettingsSection(id: string, focus = false) {
   const nav = root.querySelector<HTMLElement>('.settings-links');
   if (nav) nav.style.top = `${document.querySelector('.app-header')?.getBoundingClientRect().height || 80}px`;
   if (id === 'permissions-settings') void refreshPermissions();
+  if (id === 'update-settings') void refreshUpdateStatus();
 }
 
 export async function refreshPermissions() {
@@ -275,7 +276,7 @@ export function renderSettings(s: Settings) {
         </label>
       </section>
       ${syncSettings()}
-      <section id="update-settings" class="panel settings settings-card">${updateSettings()}<p class="small muted">更新偏好立即生效，无需保存监控设置。</p></section>
+      <section id="update-settings" class="panel settings settings-card">${updateSettings()}</section>
       <section id="help-settings">${renderGuide()}</section>
     </div>`;
   selectSettingsSection(section);
@@ -411,6 +412,8 @@ document.addEventListener('submit', async event => {
   controls.forEach(control => { control.disabled = true; });
   submit.disabled = true;
   try {
+    const current = deps.settings();
+    const updatePrefs = getUpdatePreferences();
     const s: Settings = {
       manual_nodes_only: f.get('manual_nodes_only') === 'true',
       claude_proxy: String(f.get('claude_proxy') || '').trim(),
@@ -419,11 +422,13 @@ document.addEventListener('submit', async event => {
       interval: Number(f.get('interval')),
       notifications: f.has('notifications'),
       retain_history: f.has('retain_history'),
-      ipv6: deps.settings().ipv6,
+      ipv6: current.ipv6,
       ipv6_required: f.has('ipv6_required'),
       domestic_proxy: String(f.get('domestic_proxy') || '').trim(),
       foreign_proxy: String(f.get('foreign_proxy') || '').trim(),
       ignored_checks: IGNORABLE.map(([id]) => id).filter(id => ignoredDraft.has(id)),
+      auto_update_check: updatePrefs?.auto_update_check ?? current.auto_update_check ?? true,
+      auto_update_install: updatePrefs?.auto_update_install ?? current.auto_update_install ?? true,
     };
     if (!s.retain_history && deps.settings().retain_history && deps.historyCount() &&
         !await confirmAction({ title: '停止保存并清空变化记录？', message: `已有的 ${deps.historyCount()} 条变化记录将删除，之后不再保存新记录。`, confirm: '清空并保存设置', danger: true })) return;

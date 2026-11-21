@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './style.css';
-import { initUpdates } from './updater';
+import { initUpdates, revealUpdateUi } from './updater';
 import { hasUnsavedSync, discardUnsavedSync, syncInProgress } from './sync';
 import { getVersion } from '@tauri-apps/api/app';
 import { ListView } from './list';
@@ -827,7 +827,15 @@ async function start() {
       resetProxyDataUi();
     });
     await listen('open-data-settings', () => { void switchTab('records', 'data'); });
-    await initUpdates();
+    await listen('open-update-settings', async () => {
+      await switchTab('settings');
+      if (tab === 'settings') {
+        selectSettingsSection('update-settings', true);
+        window.scrollTo({ top: 0 });
+      }
+      revealUpdateUi();
+    });
+    await initUpdates(toast);
     await initDiagnostics(openTab => {
       if (openTab) void switchTab('diagnostics', 'curl');
       else if (tab === 'diagnostics') render();
