@@ -46,8 +46,8 @@ pub fn build(
             return Ok(sub);
         };
         let g = geodata.get(ip);
-        let name = g
-            .and_then(|g| g["connection"]["isp"].as_str())
+        let name = p.map(|p| p.isp.as_str()).filter(|s| !s.is_empty()).or_else(|| g
+            .and_then(|g| g["connection"]["isp"].as_str()))
             .unwrap_or("");
         let location = g
             .map(|g| {
@@ -91,7 +91,7 @@ pub fn build(
                 "类型依据",
                 network_type["basis"].as_str().unwrap_or("待查询").into(),
             ),
-            ("name", "IP 名称", name.to_string()),
+            ("name", "运营商 ISP", name.to_string()),
             ("location", "位置", location),
             ("postal", "当地邮编（IP 定位）", postal.into()),
             ("org", "所属组织", org.into()),

@@ -11,7 +11,7 @@ import { confirmAction } from './confirm';
 import { initSearchSelects, refreshSearchSelects, setSelectValue } from './select';
 import { icon, esc, time, titles, safetyText } from './ui';
 import type { Event, RouteSnapshot, IpRecord, View, Json } from './types';
-import { geoCache, probeList, probeRow, recordSeries, renderOverview, series } from './overview';
+import { lanList, lanRows, lanRow, geoCache, probeList, probeRow, recordSeries, renderOverview, series } from './overview';
 import {
   aiList, nodeList, routeList, routeRow, renderIpRecords, renderNodeRecords, populateNodeChoices,
   captureDrafts, restoreDrafts, clearDrafts, fillIp, fillNode, ipRecordRow, nodeRecordRow,
@@ -626,6 +626,7 @@ function listFor(id: string | undefined): { list: { id: string; page: number; ch
   switch (id) {
     case 'ai-nodes': return { list: nodeList, html: () => nodeList.render(state!.ai_nodes || [], nodeRecordRow) };
     case 'ai-ips': return { list: aiList, html: () => aiList.render(state!.claude_ips, ipRecordRow) };
+    case 'lan-egress': return { list: lanList, html: () => lanList.render(lanRows(state!), lanRow) };
     case 'probes': return { list: probeList, html: () => probeList.render(state!.probes, probeRow) };
     case 'ip-routes': return { list: routeList, html: () => routeList.render(routeRows, routeRow) };
     case 'near-nodes': return { list: nearList, html: renderNearList };

@@ -121,6 +121,13 @@ pub struct Probe {
     pub checked: String,
     pub error: Option<String>,
     pub stable: bool,
+    /// Explicitly bound source for per-LAN observations; never an inferred default route.
+    #[serde(default)]
+    pub source_ip: Option<String>,
+    #[serde(default)]
+    pub source_interface: String,
+    #[serde(default)]
+    pub isp: String,
     #[serde(skip)]
     pub tracker: Tracker,
 }

@@ -83,13 +83,74 @@ pub fn probes(_ipv6: bool) -> Vec<Probe> {
         })
         .collect()
 }
+/// Only addresses assigned to this host are probed. Binding never changes system routing.
+pub fn lan_probes(previous: &[Probe]) -> Vec<Probe> {
+    let mut sources: Vec<_> = if_addrs::get_if_addrs().unwrap_or_default().into_iter()
+        .filter(|i| !i.is_loopback() && !crate::link::is_virtual(&i.name))
+        .filter_map(|i| match i.ip() {
+            std::net::IpAddr::V4(ip) if !ip.is_link_local() && !ip.is_unspecified() => Some((i.name, ip)),
+            _ => None,
+        }).collect();
+    sources.sort();
+    sources.dedup();
+    sources.into_iter().flat_map(|(interface, ip)| {
+        probes(false).into_iter().filter(|p| p.group == "domestic").map(move |mut p| {
+            let id = format!("lan:{}:{}:{}", interface, ip, p.id);
+            if let Some(old) = previous.iter().find(|old| old.id == id) { return old.clone(); }
+            p.id = id;
+            p.group = "domestic-lan".into();
+            p.source_ip = Some(ip.to_string());
+            p.source_interface = interface.clone();
+            p.label = format!("{} · {} · {}", interface, ip, p.label);
+            p
+        })
+    }).collect()
+}
+
+/// IPIP supplies an operator alongside the exact observed IP, so it remains usable if
+/// the separate geography service is unavailable. Do not guess an operator from an IP prefix.
+fn ipip_isp(body: &str) -> String {
+    let Some((_, location)) = body.split_once("来自于：").or_else(|| body.split_once("来自于:")) else {
+        return String::new();
+    };
+    let parts: Vec<_> = location.split_whitespace().collect();
+    // IPIP's domestic format is country, province, city, then the complete operator name.
+    let operator = if parts.len() >= 4 { parts[3..].join(" ") } else { String::new() };
+    match operator.as_str() {
+        "电信" => "中国电信".into(),
+        "联通" => "中国联通".into(),
+        "移动" => "中国移动".into(),
+        "广电" => "中国广电".into(),
+        "铁通" => "中国铁通".into(),
+        _ => operator,
+    }
+}
+
 pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
     let start = Instant::now();
     let result = async {
         let v6 = p.group.ends_with('6') || p.group == "ipv6";
-        let c = client_for_probe(&proxy, v6, true)?;
+        let c = if let Some(source) = &p.source_ip {
+            let addr: std::net::IpAddr = source.parse().map_err(|_| "源地址无效")?;
+            // Per-source observations are direct HTTP requests. A TUN/VPN can still intercept them.
+            client_builder("direct")?.local_address(addr).build().map_err(|_| "无法绑定局域网源地址")?
+        } else {
+            client_for_probe(&proxy, v6, true)?
+        };
+        let fake_target = if p.source_ip.is_some() {
+            let target = url::Url::parse(&p.url).ok();
+            if let Some(host) = target.as_ref().and_then(|u| u.host_str()) {
+                tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((host, 443))).await
+                    .ok().and_then(Result::ok).is_some_and(|mut ips| ips.any(|a| match a.ip() {
+                        std::net::IpAddr::V4(ip) => ip.octets()[0] == 198 && [18, 19].contains(&ip.octets()[1]),
+                        _ => false,
+                    }))
+            } else { false }
+        } else { false };
         let response = c.get(&p.url).send().await.map_err(|e| {
-            if e.is_timeout() {
+            if fake_target {
+                "源地址检测失败：检测站解析为 Fake-IP，VPN/TUN 可能限制源地址绑定；未回退默认路径".into()
+            } else if e.is_timeout() {
                 "连接超时（12 秒）".into()
             } else {
                 "无法连接检测站（请检查路由、代理或 DNS）".to_string()
@@ -113,7 +174,7 @@ pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
         if v6 != ip.contains(':') {
             return Err("返回地址族与检测项不一致".into());
         }
-        let detail = if p.id == "cn-ipip" {
+        let detail = if p.url == "https://myip.ipip.net" {
             body.trim().to_string()
         } else if p.id == "global-cf" {
             body.lines()
@@ -133,12 +194,14 @@ pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
             p.last_good_ip = Some(ip.clone());
             p.ip = Some(ip);
             p.error = None;
+            p.isp = ipip_isp(&detail);
             p.detail = detail;
         }
         Err(error) => {
             p.ip = None;
             p.error = Some(error);
             p.detail.clear();
+            p.isp.clear();
         }
     }
     p
@@ -498,6 +561,53 @@ mod tests {
         });
         format!("http://{addr}")
     }
+    #[test]
+    fn operator_is_extracted_only_from_ipip_location() {
+        assert_eq!(ipip_isp("当前 IP：8.8.8.8 来自于：中国 北京 北京 联通"), "中国联通");
+        assert_eq!(ipip_isp("当前 IP：8.8.8.8 来自于：中国 广东 广州 电信"), "中国电信");
+        assert_eq!(ipip_isp("当前 IP：8.8.8.8 来自于：中国 北京 北京"), "");
+        assert_eq!(ipip_isp("loc=CN\ncolo=PEK"), "");
+    }
+
+    #[tokio::test]
+    async fn bound_source_is_used_and_unassigned_source_never_falls_back() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, peer) = listener.accept().await.unwrap();
+            assert_eq!(peer.ip().to_string(), "127.0.0.1");
+            let mut buf = [0; 4096];
+            stream.read(&mut buf).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n8.8.8.8").await.unwrap();
+        });
+        let probe = Probe { url: format!("http://{addr}"), source_ip: Some("127.0.0.1".into()), ..Default::default() };
+        // A per-LAN probe must not accidentally use the configured proxy.
+        assert_eq!(run_probe(probe, "http://127.0.0.1:1".into()).await.ip.as_deref(), Some("8.8.8.8"));
+        server.await.unwrap();
+        let probe = Probe { url: serve("8.8.8.8", "200 OK").await, source_ip: Some("192.0.2.99".into()), ..Default::default() };
+        let result = run_probe(probe, "direct".into()).await;
+        assert!(result.ip.is_none());
+        assert!(result.error.is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in live per-source domestic observations"]
+    async fn live_lan_observations() {
+        let targets = lan_probes(&[]);
+        assert!(!targets.is_empty(), "no assigned physical IPv4 sources");
+        let results = futures::future::join_all(targets.into_iter().map(|p| run_probe(p, "direct".into()))).await;
+        let successes = results.iter().filter(|p| p.ip.is_some()).count();
+        let operators = results.iter().filter(|p| !p.isp.is_empty()).count();
+        println!("LAN observations: {} sources/targets, {} successful, {} with operator", results.len(), successes, operators);
+        assert!(results.iter().all(|p| p.ip.is_some() || p.error.is_some()));
+        let default = run_probe(probes(false).remove(0), "direct".into()).await;
+        assert!(default.ip.is_some(), "default domestic path unavailable");
+        assert!(!default.isp.is_empty(), "default path has no IPIP operator");
+        println!("Default domestic operator: {}; per-source failures preserved without fallback", default.isp);
+        let restored = lan_probes(&results);
+        assert!(restored.iter().all(|p| results.iter().any(|r| r.id == p.id && r.checked == p.checked)));
+    }
+
     #[tokio::test]
     async fn transport_handles_json_html_429_and_unreachable() {
         for (body, status, ok) in [

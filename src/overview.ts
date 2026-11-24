@@ -12,12 +12,46 @@ export const probeList = new ListView<Probe>(
   {
     label: { label: '检测站', value: r => r.label },
     ip: { label: '出口 IP', value: r => r.ip || '' },
+    source: { label: '局域网源地址', value: r => r.source_ip || '' },
+    isp: { label: '运营商', value: r => operator(r) },
     latency: { label: '耗时', value: r => String(r.latency) },
   },
-  r => `${r.label} ${r.ip || ''} ${r.error || ''}`,
+  r => `${r.label} ${r.ip || ''} ${r.source_ip || ''} ${operator(r)} ${r.error || ''}`,
   r => r.group,
-  { domestic: '国内 IPv4', foreign: '国外 IPv4', domestic6: '国内 IPv6', foreign6: '国外 IPv6' }
+  { 'domestic-lan': '局域网出口对照', domestic: '国内 IPv4', foreign: '国外 IPv4', domestic6: '国内 IPv6', foreign6: '国外 IPv6' }
 );
+
+/** Operator belongs to the observed public IP, not the detection site's brand. */
+export function operator(p: Probe): string {
+  if (!p.ip) return '';
+  return p.isp || geoCache.get(p.ip)?.connection?.isp || '';
+}
+
+export const lanList = new ListView<Probe>(
+  'lan-egress',
+  {
+    source: { label: '局域网源地址', value: p => p.source_ip || '' },
+    interface: { label: '网卡', value: p => p.source_interface || '' },
+    ip: { label: '公网出口', value: p => p.ip || '' },
+    isp: { label: '运营商', value: operator },
+    target: { label: '检测目标', value: p => p.url },
+  },
+  p => `${p.source_interface} ${p.source_ip} ${p.ip || ''} ${operator(p)} ${p.url} ${p.error || ''}`,
+  p => p.ip ? 'ok' : p.checked ? 'error' : 'waiting',
+  { ok: '已测得出口', error: '检测失败', waiting: '等待检测' }
+);
+
+export const lanRows = (v: View) => v.probes.filter(p => p.source_ip);
+
+export function lanRow(p: Probe) {
+  return `<article class="lan-egress-row">
+    <div><strong>${esc(p.source_interface)}</strong><small class="mono">${esc(p.source_ip)}</small></div>
+    <div><strong class="mono">${esc(p.ip || (p.checked ? '不可达' : '等待检测'))}</strong>
+      <small>${esc(p.ip ? `运营商：${operator(p) || '未查到'}` : p.error || '')}</small></div>
+    <div><small>${esc(new URL(p.url).hostname)} · ${esc(ago(p.checked))}</small>
+      ${p.ip ? `<div class="tile-actions"><button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button><button type="button" class="text-button compact" data-detail="${esc(p.id)}" aria-label="详情 ${esc(p.source_interface)} ${esc(p.source_ip)} ${esc(new URL(p.url).hostname)}">详情 ${icon('arrow')}</button></div>` : ''}</div>
+  </article>`;
+}
 
 const levelText: Record<string, string> = { safe: '已标记可用', warn: '需要确认', risk: '有风险', unknown: '未确认' };
 const healthText: Record<string, string> = { reachable: '访问正常', restricted: '访问受限（403 / 429 等）', unreachable: '连接失败' };
@@ -138,11 +172,13 @@ function exitTile(v: View, group: string, title: string) {
     <span class="exit-tile-title">${esc(title)}${optional ? ' · 可选' : ''}</span>
     <strong class="mono">${esc(p?.ip || (v.paused ? '已暂停' : p?.checked ? '不可达' : '等待检测'))}</strong>
     <small>${esc(where + tax)}</small>
+    ${p?.ip ? `<small>运营商：${esc(operator(p) || '未查到')}</small>` : ''}
+    ${group === 'domestic' && new Set(v.probes.filter(x => x.group === group && x.ip).map(x => x.ip)).size > 1 ? '<small class="warning">国内检测站观测到不同出口，见下方明细</small>' : ''}
     ${optional ? '<small>不影响总体状态</small>' : ''}
-    <div class="exit-tile-foot">
+    <footer class="exit-tile-foot">
       <small>${p?.ip ? `${p.latency} ms · ${esc(p.label)}` : ''}</small>
-      ${p?.ip ? `<div class="tile-actions"><button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button><button type="button" class="text-button compact" data-detail="${esc(p.id)}">详情 ${icon('arrow')}</button></div>` : ''}
-    </div>
+      ${p?.ip ? `<div class="tile-actions"><button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button><button type="button" class="text-button compact" data-detail="${esc(p.id)}" aria-label="详情 ${esc(title)}">详情 ${icon('arrow')}</button></div>` : ''}
+    </footer>
   </article>`;
 }
 
@@ -182,10 +218,10 @@ function chart(p: Probe) {
 
 export function probeRow(p: Probe) {
   return `<div class="probe-row">
-    <div class="probe-target"><strong>${esc(p.label)}</strong><small>${esc(new URL(p.url).hostname)}</small></div>
+    <div class="probe-target"><strong>${esc(p.label)}</strong><small>${esc(new URL(p.url).hostname)}</small>${p.source_ip ? `<small>源地址 ${esc(p.source_interface)} · ${esc(p.source_ip)}</small>` : ''}</div>
     <div class="probe-ip-col">
       <div class="probe-ip-line"><span class="dot ${p.ip ? 'green' : 'amber'}"></span><span class="mono">${esc(p.ip || (p.checked ? '不可达' : '等待检测'))}</span></div>
-      <small>${esc(p.error || (!p.stable ? '变化待二次确认' : ''))}</small>
+      <small>${p.ip ? `运营商：${esc(operator(p) || '未查到')} · ` : ''}${esc(p.error || (!p.stable ? '变化待二次确认' : ''))}</small>
     </div>
     <div class="probe-chart-col">${chart(p)}</div>
     <div class="latency">${p.checked ? `<span class="latency-pill">${p.latency} <small>ms</small></span>` : '—'}</div>
@@ -236,12 +272,19 @@ export function renderOverview(v: View): string {
     <p class="small muted">刷新网络状态：检查出口与网站连通性。深入测试：主动请求 Claude / Gemini 并复核 Gemini 地区。人工标记只表示你登记的使用经验，不代表账号状态。</p>
 
     <div class="section-head"><h2>网络出口</h2>${uplinkChip(v.uplink, v.network)}</div>
+    <p class="small muted">卡片显示各检测站沿默认请求路径看到的出口；公司网关可按源地址、目标或协议分流，不代表局域网只有一个出口。</p>
     <div class="exit-tiles">
-      ${exitTile(v, 'domestic', '国内 IPv4')}
+      ${exitTile(v, 'domestic', '国内 IPv4 · 默认路径')}
       ${exitTile(v, 'foreign', '国外 IPv4')}
       ${exitTile(v, 'domestic6', '国内 IPv6')}
       ${exitTile(v, 'foreign6', '国外 IPv6')}
     </div>
+    <section class="panel lan-egress-panel">
+      <div class="section-head"><h3>局域网出口对照 · IPv4</h3></div>
+      <p class="small muted">按本机物理网卡的已分配源地址分别请求国内检测站，观察源地址与目标对应的出口；不经过应用配置的 HTTP/SOCKS 代理，仍可能受系统 VPN / TUN 或公司网关分流影响。失败不影响总体状态。</p>
+      <p class="small muted">${new Set(lanRows(v).filter(p => p.ip).map(p => p.ip)).size > 1 ? '本轮观测到多个公网出口，请对照源地址、检测目标与运营商。' : '结果仅代表本机已检测的源地址和目标；同一出口不能证明公司没有分流，其他电脑需分别检测。'}${v.paused ? ' 监控已暂停，以下为上次检测。' : ''}</p>
+      ${lanList.render(lanRows(v), lanRow)}
+    </section>
     <details class="panel probe-panel">
       <summary>检测站明细（${v.probes.length} 个）</summary>
       <div class="probe-head"><span>检测目标</span><span>出口 / 状态</span><span>延迟趋势</span><span class="align-right">耗时</span></div>

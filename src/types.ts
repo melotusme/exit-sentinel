@@ -43,6 +43,9 @@ export interface UpdateStatus {
   autoUpdateInstall: boolean;
 }
 export interface Probe {
+  source_ip?: string | null;
+  source_interface?: string;
+  isp?: string;
   id: string;
   label: string;
   group: string;

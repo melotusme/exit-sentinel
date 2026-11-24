@@ -187,6 +187,7 @@ pub(crate) fn clear_pending_changes(v: &mut View) {
 fn core_probes(v: &View) -> Vec<&Probe> {
     v.probes
         .iter()
+        .filter(|p| p.source_ip.is_none())
         .filter(|p| !p.group.ends_with('6') || v.settings.ipv6_required)
         .collect()
 }
@@ -923,7 +924,7 @@ fn apply_probe_results(
         .iter()
         .cloned()
         .map(|mut p| {
-            let monitored = (!p.group.ends_with('6') || settings.ipv6_required)
+            let monitored = p.source_ip.is_none() && (!p.group.ends_with('6') || settings.ipv6_required)
                 && !settings.ignores(&format!("probe:{}", p.id));
             let prior_some = p.tracker.prior_some().map(str::to_string);
             if let Some((old, new)) = p.tracker.observe(p.ip.clone()) {
@@ -1060,7 +1061,9 @@ async fn worker(app: tauri::AppHandle, s: Shared) {
             (d.view.settings.clone(), d.view.probes.clone(), d.generation)
         };
         refresh(&app, &s);
-        let jobs = probes.into_iter().map(|p| {
+        let mut current: Vec<_> = probes.iter().filter(|p| p.source_ip.is_none()).cloned().collect();
+        current.extend(net::lan_probes(&probes));
+        let jobs = current.into_iter().map(|p| {
             let proxy = if p.group.starts_with("domestic") {
                 settings.domestic_proxy.clone()
             } else {
@@ -1528,6 +1531,17 @@ mod status_tests {
         assert_eq!(degraded_status(&mixed), "degraded");
         assert_eq!(degraded_status(&[verdict(verdict::Level::Unknown)]), "degraded");
         assert_eq!(degraded_status(&[]), "degraded");
+    }
+
+    #[test]
+    fn lan_failures_are_observations_not_overall_outages() {
+        let mut p = probe("lan:test", "domestic-lan", None);
+        p.source_ip = Some("192.0.2.1".into());
+        p.checked = "2026-01-01T00:00:00Z".into();
+        p.error = Some("source unavailable".into());
+        let view = View { probes: vec![p], ..Default::default() };
+        assert!(core_probes(&view).is_empty());
+        assert!(issues(&view).is_empty());
     }
 
     fn probe(id: &str, group: &str, ip: Option<&str>) -> Probe {
