@@ -126,31 +126,68 @@ fn ipip_isp(body: &str) -> String {
     }
 }
 
+/// Resolve only the fixed public echo hosts when the system returns a TUN Fake-IP.
+/// The answer is pinned on this HTTP client; TLS still verifies the original hostname.
+async fn real_probe_addresses(host: &str) -> Result<Vec<std::net::SocketAddr>, String> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    type Answer = Result<Vec<std::net::SocketAddr>, String>;
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, (Instant, Answer)>>> = OnceLock::new();
+    if !["myip.ipip.net", "ip.3322.net"].contains(&host) {
+        return Err("仅固定国内检测站支持 Fake-IP 真实解析".into());
+    }
+    let mut cache = CACHE.get_or_init(Default::default).lock().await;
+    if let Some((at, answer)) = cache.get(host) {
+        let ttl = if answer.is_ok() { 300 } else { 60 };
+        if at.elapsed() < Duration::from_secs(ttl) { return answer.clone(); }
+    }
+    let result = async {
+        let value: Value = client("direct", false)?.get("https://dns.alidns.com/resolve")
+            .query(&[("name", host), ("type", "A")]).timeout(Duration::from_secs(6))
+            .send().await.map_err(|_| "AliDNS 真实解析连接失败")?
+            .error_for_status().map_err(|_| "AliDNS 真实解析返回错误")?
+            .json().await.map_err(|_| "AliDNS 真实解析响应无效")?;
+        let addresses: Vec<_> = value["Answer"].as_array().into_iter().flatten()
+            .filter(|a| a["type"] == 1)
+            .filter_map(|a| a["data"].as_str().and_then(|ip| public_ip(ip).ok()))
+            .filter_map(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
+            .map(|ip| std::net::SocketAddr::new(ip.into(), 443)).collect();
+        if value["Status"] != 0 || addresses.is_empty() { return Err("AliDNS 未返回有效公网 IPv4".into()); }
+        Ok(addresses)
+    }.await;
+    cache.insert(host.into(), (Instant::now(), result.clone()));
+    result
+}
+
 pub async fn run_probe(mut p: Probe, proxy: String) -> Probe {
     let start = Instant::now();
     let result = async {
         let v6 = p.group.ends_with('6') || p.group == "ipv6";
+        p.source_dns.clear();
         let c = if let Some(source) = &p.source_ip {
             let addr: std::net::IpAddr = source.parse().map_err(|_| "源地址无效")?;
-            // Per-source observations are direct HTTP requests. A TUN/VPN can still intercept them.
-            client_builder("direct")?.local_address(addr).build().map_err(|_| "无法绑定局域网源地址")?
-        } else {
-            client_for_probe(&proxy, v6, true)?
-        };
-        let fake_target = if p.source_ip.is_some() {
+            let mut builder = client_builder("direct")?.local_address(addr);
             let target = url::Url::parse(&p.url).ok();
+            p.source_dns = "系统 DNS".into();
             if let Some(host) = target.as_ref().and_then(|u| u.host_str()) {
-                tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((host, 443))).await
+                let fake = tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((host, 443))).await
                     .ok().and_then(Result::ok).is_some_and(|mut ips| ips.any(|a| match a.ip() {
                         std::net::IpAddr::V4(ip) => ip.octets()[0] == 198 && [18, 19].contains(&ip.octets()[1]),
                         _ => false,
-                    }))
-            } else { false }
-        } else { false };
+                    }));
+                if fake {
+                    p.source_dns = "AliDNS（规避 Fake-IP）".into();
+                    let addresses = real_probe_addresses(host).await
+                        .map_err(|e| format!("检测站为 Fake-IP；{e}；未回退默认源地址"))?;
+                    builder = builder.resolve_to_addrs(host, &addresses);
+                }
+            }
+            builder.build().map_err(|_| "无法绑定局域网源地址")?
+        } else {
+            client_for_probe(&proxy, v6, true)?
+        };
         let response = c.get(&p.url).send().await.map_err(|e| {
-            if fake_target {
-                "源地址检测失败：检测站解析为 Fake-IP，VPN/TUN 可能限制源地址绑定；未回退默认路径".into()
-            } else if e.is_timeout() {
+            if e.is_timeout() {
                 "连接超时（12 秒）".into()
             } else {
                 "无法连接检测站（请检查路由、代理或 DNS）".to_string()
@@ -567,6 +604,12 @@ mod tests {
         assert_eq!(ipip_isp("当前 IP：8.8.8.8 来自于：中国 广东 广州 电信"), "中国电信");
         assert_eq!(ipip_isp("当前 IP：8.8.8.8 来自于：中国 北京 北京"), "");
         assert_eq!(ipip_isp("loc=CN\ncolo=PEK"), "");
+    }
+
+    #[tokio::test]
+    async fn fake_ip_resolution_is_limited_to_fixed_probe_hosts() {
+        assert!(real_probe_addresses("example.com").await.is_err());
+        assert!(real_probe_addresses("127.0.0.1").await.is_err());
     }
 
     #[tokio::test]

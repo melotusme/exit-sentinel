@@ -45,6 +45,7 @@ export interface UpdateStatus {
 export interface Probe {
   source_ip?: string | null;
   source_interface?: string;
+  source_dns?: string;
   isp?: string;
   id: string;
   label: string;

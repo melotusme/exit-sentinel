@@ -127,6 +127,8 @@ pub struct Probe {
     #[serde(default)]
     pub source_interface: String,
     #[serde(default)]
+    pub source_dns: String,
+    #[serde(default)]
     pub isp: String,
     #[serde(skip)]
     pub tracker: Tracker,

@@ -45,7 +45,7 @@ export const lanRows = (v: View) => v.probes.filter(p => p.source_ip);
 
 export function lanRow(p: Probe) {
   return `<article class="lan-egress-row">
-    <div><strong>${esc(p.source_interface)}</strong><small class="mono">${esc(p.source_ip)}</small></div>
+    <div><strong>${esc(p.source_interface)}</strong><small class="mono">${esc(p.source_ip)}</small><small>${esc(p.source_dns || '')}</small></div>
     <div><strong class="mono">${esc(p.ip || (p.checked ? '不可达' : '等待检测'))}</strong>
       <small>${esc(p.ip ? `运营商：${operator(p) || '未查到'}` : p.error || '')}</small></div>
     <div><small>${esc(new URL(p.url).hostname)} · ${esc(ago(p.checked))}</small>
@@ -281,7 +281,7 @@ export function renderOverview(v: View): string {
     </div>
     <section class="panel lan-egress-panel">
       <div class="section-head"><h3>局域网出口对照 · IPv4</h3></div>
-      <p class="small muted">按本机物理网卡的已分配源地址分别请求国内检测站，观察源地址与目标对应的出口；不经过应用配置的 HTTP/SOCKS 代理，仍可能受系统 VPN / TUN 或公司网关分流影响。失败不影响总体状态。</p>
+      <p class="small muted">按本机物理网卡的已分配源地址分别请求国内检测站，观察源地址与目标对应的出口；源地址直连不经过应用配置的 HTTP/SOCKS 代理；遇到 Fake-IP 时，仅对该检测请求使用 AliDNS 真实解析，不改系统 DNS。结果仍受公司网关路由影响，失败不影响总体状态。</p>
       <p class="small muted">${new Set(lanRows(v).filter(p => p.ip).map(p => p.ip)).size > 1 ? '本轮观测到多个公网出口，请对照源地址、检测目标与运营商。' : '结果仅代表本机已检测的源地址和目标；同一出口不能证明公司没有分流，其他电脑需分别检测。'}${v.paused ? ' 监控已暂停，以下为上次检测。' : ''}</p>
       ${lanList.render(lanRows(v), lanRow)}
     </section>
