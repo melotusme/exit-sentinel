@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import './diagnostics.css';
+import { findNear, renderNodeFinder } from './node-finder';
+import type { AppShellApi } from './store';
+import type { PanelHandle } from './types';
 
 export type Report = {
   id: string;
@@ -262,4 +264,71 @@ export async function initDiagnostics(onUpdate: (openTab?: boolean) => void) {
     state = await invoke<DiagState>('get_diagnostics');
     selected = state.selected || 'baidu';
   } catch {}
+}
+
+export function initDiagnosticsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
+  let currentSub = 'curl';
+
+  const repaint = () => {
+    if (currentSub === 'find') {
+      panel.innerHTML = renderNodeFinder();
+    } else if (currentSub === 'ip-lookup') {
+      panel.innerHTML = `<section class="panel settings">
+        <h2>IP 归属与网络查询</h2>
+        <p class="muted small">输入任意公网 IPv4 或 IPv6 地址，查看归属地、美国销售税州、运营商 ASN、保守网络类型及附近公开地址参考。</p>
+        <form id="inline-ip-lookup-form" class="ip-lookup-controls">
+          <input name="ip" type="text" required maxlength="45" autocomplete="off" spellcheck="false" placeholder="例如 198.51.100.42 或 2001:db8::1">
+          <button type="submit" class="primary">打开查询详情</button>
+        </form>
+      </section>`;
+    } else {
+      panel.innerHTML = renderDiagnosticsTab();
+    }
+  };
+
+  panel.addEventListener('click', async event => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!btn || btn.disabled) return;
+    if (currentSub === 'curl') {
+      await handleDiagnosticsClick(btn, repaint, msg => app.showToast(msg));
+    }
+  });
+
+  panel.addEventListener('submit', event => {
+    const form = event.target as HTMLFormElement;
+    if (form.id === 'near-form') {
+      event.preventDefault();
+      const text = String(new FormData(form).get('near-query') || '');
+      void findNear(text, () => {
+        if (currentSub === 'find') repaint();
+      });
+    } else if (form.id === 'inline-ip-lookup-form') {
+      event.preventDefault();
+      const ip = String(new FormData(form).get('ip') || '').trim();
+      if (ip) void app.openIpModal(ip);
+    }
+  });
+
+  void initDiagnostics(openTab => {
+    if (openTab) {
+      void app.navigate('diagnostics', 'curl');
+    } else if (app.getRoute().tab === 'diagnostics' && currentSub === 'curl') {
+      repaint();
+    }
+  });
+
+  return {
+    getSubTabs() {
+      const { testedCount, totalCount } = getDiagnosticsState();
+      return [
+        { id: 'curl', label: '网站连通性', badge: `${testedCount}/${totalCount}` },
+        { id: 'ip-lookup', label: 'IP 归属查询' },
+        { id: 'find', label: '按地区找节点' },
+      ];
+    },
+    render(_view, activeSub) {
+      currentSub = activeSub || 'curl';
+      repaint();
+    },
+  };
 }

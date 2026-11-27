@@ -1,8 +1,18 @@
-// Records page: IP records, node records and their edit forms.
+// Records page: IP records, node records, change history, and proxy data import/clear.
+import { confirmAction } from './confirm';
 import { ListView } from './list';
+import {
+  initProxyData,
+  loadLocalProxyClients,
+  proxyDataInProgress,
+  proxyDataSettings,
+  resetProxyDataUi,
+  updateProxyDataState,
+} from './proxy-data';
 import { setSelectChoices, setSelectValue, type Choice } from './select';
+import type { AppShellApi } from './store';
 import { esc, safetyText, serviceName, time } from './ui';
-import type { IpRecord, NodeRecord, RouteSnapshot, View } from './types';
+import type { Event, IpRecord, NodeRecord, PanelHandle, RouteSnapshot, View } from './types';
 
 const statusFilters = (safeLabel: string) =>
   Object.fromEntries(
@@ -139,7 +149,7 @@ export function renderIpRecords(v: View, saving: boolean) {
 export function renderNodeRecords(v: View, saving: boolean) {
   return `<section class="panel ai-records">
     <form id="ai-node-form" class="ai-form embedded-form">
-      <label class="note-field"><span>节点</span><select name="target" required aria-label="节点"><option value="">选择当前节点或已登记节点</option></select></label>
+      <label class="note-field"><span>节点</span><select name="target" data-searchable required aria-label="节点"><option value="">选择当前节点或已登记节点</option></select></label>
       <label><span>状态</span><select name="status">${statusOptions}</select></label>
       <label class="note-field"><span>备注</span><input autocomplete="off" name="note" maxlength="500" placeholder="已验证可用、节点地区…"></label>
       <div class="ai-form-submit"><button type="submit" class="primary" ${saving ? 'disabled' : ''}>${saving ? '正在保存…' : '保存节点'}</button></div>
@@ -220,4 +230,177 @@ export function fillNode(root: HTMLElement, v: View, service: string, key: strin
   fillForm(form, { target: `${current ? 'current' : 'saved'}:${service}:${key}`, status: record?.status || 'pending', note: record?.note || '' });
   form.scrollIntoView({ block: 'center', behavior: scrollBehavior() });
   (form.elements.namedItem('status') as HTMLSelectElement).focus();
+}
+
+const historyList = new ListView<Event>(
+  'history',
+  {
+    time: { label: '时间', value: r => r.time },
+    title: { label: '事件', value: r => r.title },
+  },
+  r => `${r.title} ${r.detail}`,
+  () => ''
+);
+
+function historyRow(e: Event) {
+  return `<article class="timeline-item">
+    <span class="timeline-dot"></span>
+    <div class="timeline-card">
+      <div class="timeline-header">
+        <h3>${esc(e.title)}</h3>
+        <time>${time(e.time)}</time>
+      </div>
+      <p>${esc(e.detail).replace(/\n/g, '<br>')}</p>
+    </div>
+  </article>`;
+}
+
+export function initRecordsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
+  let ipSaving = false;
+  let nodeSaving = false;
+  let activeSub = 'ips';
+
+  initProxyData(
+    (msg, err) => app.showToast(msg, { persistent: Boolean(err), tone: err ? 'risk' : 'neutral' }),
+    async () => {
+      await app.call('get_state');
+    }
+  );
+
+  panel.addEventListener('click', async event => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!btn || btn.disabled) return;
+    const state = app.getState();
+    if (!state) return;
+
+    if (btn.dataset.fillIp) {
+      fillIp(panel, { service: btn.dataset.fillService!, ip: btn.dataset.fillIp, status: 'pending', note: '' });
+    } else if (btn.dataset.editIp) {
+      const r = state.claude_ips.find(x => x.ip === btn.dataset.editIp && x.service === btn.dataset.editService);
+      if (r) fillIp(panel, r);
+    } else if (btn.dataset.editNode) {
+      fillNode(panel, state, btn.dataset.nodeService!, btn.dataset.editNode, false);
+    } else if (btn.id === 'clear') {
+      if (
+        !(await confirmAction({
+          title: '清空变化记录？',
+          message: '清空全部网络与出口变化日志。IP 和节点库将保留。',
+          detail: '清空前自动生成本机恢复备份。',
+          confirm: '备份并清空',
+          danger: true,
+        }))
+      )
+        return;
+      await app.clearMonitorData('history');
+      app.showToast('变化记录已清空');
+    }
+  });
+
+  panel.addEventListener('submit', async event => {
+    const form = event.target as HTMLFormElement;
+    if (form.id === 'ai-ip-form') {
+      event.preventDefault();
+      if (ipSaving) return;
+      ipSaving = true;
+      const f = new FormData(form);
+      const submitBtn = form.querySelector<HTMLButtonElement>('[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        await app.call('save_claude_ip', {
+          service: String(f.get('service')),
+          ip: String(f.get('ip')).trim(),
+          status: String(f.get('status')),
+          note: String(f.get('note')).trim(),
+          attachCurrent: f.has('attach_current'),
+        });
+        app.showToast('IP 状态已保存');
+      } finally {
+        ipSaving = false;
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    } else if (form.id === 'ai-node-form') {
+      event.preventDefault();
+      if (nodeSaving) return;
+      nodeSaving = true;
+      const f = new FormData(form);
+      const submitBtn = form.querySelector<HTMLButtonElement>('[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+      const [kind, service, ...keyParts] = String(f.get('target')).split(':');
+      try {
+        await app.call('save_ai_node', {
+          service,
+          key: keyParts.join(':'),
+          status: String(f.get('status')),
+          note: String(f.get('note')).trim(),
+          current: kind === 'current',
+        });
+        app.showToast('节点状态已保存');
+      } finally {
+        nodeSaving = false;
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    }
+  });
+
+  const paint = (v: View | undefined, sub: string) => {
+    activeSub = sub || 'ips';
+    if (!v) return;
+    updateProxyDataState(v.paused);
+    if (activeSub === 'data' && panel.querySelector('#proxy-data-settings')) {
+      return;
+    }
+    captureDrafts(panel);
+    if (activeSub === 'ips') {
+      panel.innerHTML = renderIpRecords(v, ipSaving);
+    } else if (activeSub === 'nodes') {
+      panel.innerHTML = renderNodeRecords(v, nodeSaving);
+      populateNodeChoices(panel, v);
+    } else if (activeSub === 'history') {
+      panel.innerHTML = `<section class="panel timeline">
+        <div class="panel-toolbar-head">
+          <div><h2>变化历史</h2><small class="muted">连续两次确认的出口变化、服务告警和手动操作，保留最近 200 条</small></div>
+          <button type="button" id="clear">清空记录</button>
+        </div>
+        ${historyList.render(v.history, historyRow)}
+      </section>`;
+    } else {
+      panel.innerHTML = proxyDataSettings(v.paused);
+      void loadLocalProxyClients();
+    }
+    restoreDrafts(panel);
+  };
+
+  return {
+    getSubTabs(v) {
+      return [
+        { id: 'ips', label: 'IP 记录', badge: v?.claude_ips.length || 0 },
+        { id: 'nodes', label: '节点库', badge: v?.ai_nodes.length || 0 },
+        { id: 'history', label: '变化历史', badge: v?.history.length || 0 },
+        { id: 'data', label: '导入与清理' },
+      ];
+    },
+    render: paint,
+    canLeave() {
+      if (activeSub === 'data' && proxyDataInProgress()) {
+        app.showToast('节点操作正在进行，请等待完成后再切换。');
+        return false;
+      }
+      return true;
+    },
+    hasUnsavedWork() {
+      return proxyDataInProgress();
+    },
+    onDataCleared(scope) {
+      if (scope !== 'history') {
+        clearDrafts();
+        for (const f of panel.querySelectorAll<HTMLFormElement>('#ai-ip-form, #ai-node-form')) f.reset();
+      }
+      resetProxyDataUi();
+    },
+    onNavigatePayload(sub, payload) {
+      if (sub === 'ips' && payload && typeof payload === 'object' && 'ip' in (payload as any)) {
+        fillIp(panel, payload as Pick<IpRecord, 'service' | 'ip' | 'status' | 'note'>);
+      }
+    },
+  };
 }

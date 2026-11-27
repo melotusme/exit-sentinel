@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { setUpdateState } from './store';
 import { esc } from './ui';
 import type { UpdatePhase, UpdateStatus } from './types';
 
@@ -351,6 +352,7 @@ function paintAll() {
 function applyStatus(next: UpdateStatus) {
   loaded = true;
   status = next;
+  setUpdateState(next);
   localError = null;
   if (next.phase !== 'idle' || next.error || next.latestVersion) {
     manualCheckFeedback = null;

@@ -1,0 +1,260 @@
+/* Design System Tokens — Exit Sentinel
+ * Precision Desktop Utility palette (macOS / Windows / Linux).
+ * Imported into @layer tokens by src/style.css.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Crisp cross-platform typography: avoids SimSun CJK fallback on Windows */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, Menlo,
+    "PingFang SC", "Microsoft YaHei UI", monospace;
+
+  /* Type scale (base 14px = 1rem) */
+  --text-xs: 0.7857rem;   /* 11px */
+  --text-sm: 0.8571rem;   /* 12px */
+  --text-base: 0.9286rem; /* 13px */
+  --text-md: 1rem;        /* 14px */
+  --text-lg: 1.1429rem;   /* 16px */
+  --text-xl: 1.2857rem;   /* 18px */
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Shell geometry */
+  --sidebar-width: 196px;
+  --header-height: 52px;
+
+  /* Concentric radii (better-ui) */
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-base: 200ms;
+
+  /* Light Theme Surfaces & Ink (Default) */
+  --bg-app: #f3f5f8;
+  --bg-rail: #eaeef4;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f8fafc;
+  --bg-hover: #eef2f7;
+  --bg-active: #e2e8f0;
+  --bg-code: #0f172a;
+  --text-code: #e2e8f0;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #56657a; /* >= 5.7:1 on #ffffff, >= 5.0:1 on #f3f5f8 */
+  --text-on-accent: #ffffff;
+
+  --border-subtle: #dde3ec;
+  --border-strong: #c4cedb;
+  --border-focus: #2563eb;
+
+  /* Brand & Primary Action Accent */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --accent-border: #bfdbfe;
+
+  /* Service Identity Accents */
+  --claude-fg: #9a3412;
+  --claude-bg: #ffedd5;
+  --claude-border: #fed7aa;
+
+  --gemini-fg: #3730a3;
+  --gemini-bg: #e0e7ff;
+  --gemini-border: #c7d2fe;
+
+  /* Semantic Status Tokens (paired with icon + text, never color alone) */
+  --status-safe-fg: #15803d;
+  --status-safe-bg: #dcfce7;
+  --status-safe-border: #86efac;
+
+  --status-warn-fg: #b45309;
+  --status-warn-bg: #fef3c7;
+  --status-warn-border: #fcd34d;
+
+  --status-risk-fg: #b91c1c;
+  --status-risk-bg: #fee2e2;
+  --status-risk-border: #fca5a5;
+
+  --status-paused-fg: #475569;
+  --status-paused-bg: #f1f5f9;
+  --status-paused-border: #cbd5e1;
+
+  /* Soft elevation shadows with vertical offset */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 6px 16px -4px rgba(15, 23, 42, 0.08), 0 2px 6px -2px rgba(15, 23, 42, 0.05);
+  --shadow-dialog: 0 24px 48px -12px rgba(15, 23, 42, 0.22), 0 8px 16px -6px rgba(15, 23, 42, 0.1);
+
+  /* Browser UI Theming */
+  --scrollbar-thumb: #94a3b8;
+  --scrollbar-track: transparent;
+  --selection-bg: rgba(37, 99, 235, 0.18);
+
+  /* Compatibility aliases for feature stylesheets */
+  --bg: var(--bg-app);
+  --surface: var(--bg-surface);
+  --surface-variant: var(--bg-subtle);
+  --surface-hover: var(--bg-hover);
+  --sidebar-bg: var(--bg-rail);
+  --text: var(--text-primary);
+  --muted: var(--text-muted);
+  --border: var(--border-subtle);
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --primary-tonal: var(--accent-soft);
+  --on-primary: var(--text-on-accent);
+  --button-primary: var(--accent);
+  --button-primary-hover: var(--accent-hover);
+  --green: var(--status-safe-fg);
+  --success-tonal: var(--status-safe-bg);
+  --success-border: var(--status-safe-border);
+  --amber: var(--status-warn-fg);
+  --warning-tonal: var(--status-warn-bg);
+  --warning-border: var(--status-warn-border);
+  --danger: var(--status-risk-fg);
+  --danger-tonal: var(--status-risk-bg);
+  --danger-border: var(--status-risk-border);
+  --foreign-accent: var(--gemini-fg);
+  --foreign-tonal: var(--gemini-bg);
+  --shadow-lg: var(--shadow-dialog);
+  --shadow-btn: 0 1px 2px rgba(37, 99, 235, 0.22);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg-app: #0b0f17;
+    --bg-rail: #0e1420;
+    --bg-surface: #131b29;
+    --bg-subtle: #182234;
+    --bg-hover: #1e2b40;
+    --bg-active: #273752;
+    --bg-code: #080c14;
+    --text-code: #e2e8f0;
+
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-on-accent: #ffffff;
+
+    --border-subtle: #223047;
+    --border-strong: #334666;
+    --border-focus: #60a5fa;
+
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-soft: rgba(59, 130, 246, 0.16);
+    --accent-border: rgba(96, 165, 250, 0.36);
+
+    --claude-fg: #fdba74;
+    --claude-bg: rgba(249, 115, 22, 0.16);
+    --claude-border: rgba(251, 146, 60, 0.34);
+
+    --gemini-fg: #a5b4fc;
+    --gemini-bg: rgba(99, 102, 241, 0.18);
+    --gemini-border: rgba(129, 140, 248, 0.36);
+
+    --status-safe-fg: #4ade80;
+    --status-safe-bg: rgba(34, 197, 94, 0.14);
+    --status-safe-border: rgba(74, 222, 128, 0.32);
+
+    --status-warn-fg: #fbbf24;
+    --status-warn-bg: rgba(245, 158, 11, 0.14);
+    --status-warn-border: rgba(251, 191, 36, 0.34);
+
+    --status-risk-fg: #f87171;
+    --status-risk-bg: rgba(239, 68, 68, 0.15);
+    --status-risk-border: rgba(248, 113, 113, 0.36);
+
+    --status-paused-fg: #94a3b8;
+    --status-paused-bg: rgba(148, 163, 184, 0.12);
+    --status-paused-border: rgba(148, 163, 184, 0.26);
+
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.36);
+    --shadow-md: 0 8px 20px -4px rgba(0, 0, 0, 0.48);
+    --shadow-dialog: 0 28px 56px -12px rgba(0, 0, 0, 0.72);
+
+    --scrollbar-thumb: #475569;
+    --selection-bg: rgba(96, 165, 250, 0.26);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #0b0f17;
+  --bg-rail: #0e1420;
+  --bg-surface: #131b29;
+  --bg-subtle: #182234;
+  --bg-hover: #1e2b40;
+  --bg-active: #273752;
+  --bg-code: #080c14;
+  --text-code: #e2e8f0;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-on-accent: #ffffff;
+
+  --border-subtle: #223047;
+  --border-strong: #334666;
+  --border-focus: #60a5fa;
+
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent-border: rgba(96, 165, 250, 0.36);
+
+  --claude-fg: #fdba74;
+  --claude-bg: rgba(249, 115, 22, 0.16);
+  --claude-border: rgba(251, 146, 60, 0.34);
+
+  --gemini-fg: #a5b4fc;
+  --gemini-bg: rgba(99, 102, 241, 0.18);
+  --gemini-border: rgba(129, 140, 248, 0.36);
+
+  --status-safe-fg: #4ade80;
+  --status-safe-bg: rgba(34, 197, 94, 0.14);
+  --status-safe-border: rgba(74, 222, 128, 0.32);
+
+  --status-warn-fg: #fbbf24;
+  --status-warn-bg: rgba(245, 158, 11, 0.14);
+  --status-warn-border: rgba(251, 191, 36, 0.34);
+
+  --status-risk-fg: #f87171;
+  --status-risk-bg: rgba(239, 68, 68, 0.15);
+  --status-risk-border: rgba(248, 113, 113, 0.36);
+
+  --status-paused-fg: #94a3b8;
+  --status-paused-bg: rgba(148, 163, 184, 0.12);
+  --status-paused-border: rgba(148, 163, 184, 0.26);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 8px 20px -4px rgba(0, 0, 0, 0.48);
+  --shadow-dialog: 0 28px 56px -12px rgba(0, 0, 0, 0.72);
+
+  --scrollbar-thumb: #475569;
+  --selection-bg: rgba(96, 165, 250, 0.26);
+}

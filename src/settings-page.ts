@@ -3,12 +3,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { confirmAction } from './confirm';
 import { renderGuide } from './guide';
-import { loadSync, syncSettings } from './sync';
+import { discardUnsavedSync, hasUnsavedSync, loadSync, syncInProgress, syncSettings } from './sync';
 import { getUpdatePreferences, refreshUpdateStatus, updateSettings } from './updater';
 import { esc } from './ui';
 import { ListView } from './list';
 import { refreshSearchSelects } from './select';
-import type { Settings } from './types';
+import type { AppShellApi } from './store';
+import type { PanelHandle, Settings } from './types';
 
 export interface SettingsDeps {
   content: HTMLElement;
@@ -444,4 +445,118 @@ document.addEventListener('submit', async event => {
     controls.forEach((control, index) => { control.disabled = disabled[index]; });
   }
 });
+
+export function initSettingsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
+  let mounted = false;
+
+  initSettings({
+    content: panel,
+    toast: (msg, persistent) => app.showToast(msg, { persistent, tone: persistent ? 'risk' : 'neutral' }),
+    call: (name, args) => app.call(name, args),
+    settings: () => app.getState()!.settings,
+    historyCount: () => app.getState()?.history.length || 0,
+    isActive: () => app.getRoute().tab === 'settings',
+  });
+
+  panel.addEventListener('input', e => {
+    const field = e.target as HTMLInputElement;
+    const form = field.closest<HTMLFormElement>('#settings-form');
+    if (form && !field.dataset.listAction) {
+      form.dataset.dirty = 'true';
+      paintSettingsDraft();
+    }
+  });
+
+  panel.addEventListener('change', e => {
+    const field = e.target as HTMLInputElement;
+    const form = field.closest<HTMLFormElement>('#settings-form');
+    if (form && !field.dataset.listAction) {
+      form.dataset.dirty = 'true';
+      paintSettingsDraft();
+    }
+  });
+
+  panel.addEventListener('click', async e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('#test-notification');
+    if (!btn || btn.disabled) return;
+    if (await permission()) {
+      await app.testNotification();
+      app.showToast('已向系统提交通知，请确认通知是否出现。');
+    }
+  });
+
+  const mapSubToSection = (sub: string) => {
+    if (['monitor-settings', 'routing-settings', 'webdav-settings', 'update-settings'].includes(sub)) {
+      return sub;
+    }
+    return 'monitor-settings';
+  };
+
+  return {
+    getSubTabs() {
+      const upd = app.getUpdateState();
+      const hasUpd = upd?.phase === 'available' || upd?.phase === 'ready_deferred';
+      return [
+        { id: 'monitor-settings', label: '常规与监控' },
+        { id: 'routing-settings', label: '代理与分流' },
+        { id: 'webdav-settings', label: '云同步' },
+        { id: 'update-settings', label: '更新与关于', badge: hasUpd ? '新版本' : null, tone: hasUpd ? 'safe' : 'neutral' },
+      ];
+    },
+    render(view, activeSub) {
+      if (!view) return;
+      if (!mounted || !panel.children.length) {
+        mounted = true;
+        renderSettings(view.settings);
+      }
+      selectSettingsSection(mapSubToSection(activeSub), false);
+    },
+    async canLeave(nextTab) {
+      if (nextTab === 'settings') return true;
+      if (settingsBusy() || syncInProgress()) {
+        app.showToast('设置操作正在进行，请等待完成后再切换页面。');
+        return false;
+      }
+      const dirty =
+        panel.querySelector<HTMLFormElement>('#settings-form')?.dataset.dirty === 'true' ||
+        hasUnsavedSync();
+      if (
+        dirty &&
+        !(await confirmAction({
+          title: '离开未保存的设置？',
+          message: '离开后将丢失本页尚未保存的输入。',
+          confirm: '放弃修改并离开',
+        }))
+      ) {
+        return false;
+      }
+      discardUnsavedSync();
+      mounted = false;
+      return true;
+    },
+    onActivate() {
+      void syncAutostart();
+    },
+    onAutostartChanged(enabled) {
+      setAutostart(enabled);
+    },
+    hasUnsavedWork() {
+      return (
+        settingsBusy() ||
+        syncInProgress() ||
+        hasUnsavedSync() ||
+        panel.querySelector<HTMLFormElement>('#settings-form')?.dataset.dirty === 'true'
+      );
+    },
+    onNavigatePayload(sub, payload) {
+      selectSettingsSection(mapSubToSection(sub), false);
+      if (payload && typeof payload === 'object' && 'scrollTo' in (payload as any)) {
+        const id = String((payload as any).scrollTo);
+        const el = panel.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+        el?.scrollIntoView({ block: 'start' });
+        el?.focus({ preventScroll: true });
+      }
+    },
+  };
+}
 

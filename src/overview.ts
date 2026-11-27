@@ -1,11 +1,10 @@
 // Overview page: one verdict card per AI service, then the plain exit IPs.
-import './overview.css';
 import { ListView } from './list';
+import { geoCache, series, type AppShellApi } from './store';
 import { ago, esc, icon, safetyText, time, titles } from './ui';
-import type { Json, Probe, Uplink, Verdict, View } from './types';
+import type { PanelHandle, Probe, Uplink, Verdict, View } from './types';
 
-export const geoCache = new Map<string, Json>();
-export const series = new Map<string, { time: string; values: number[] }>();
+export { geoCache, series };
 
 export const probeList = new ListView<Probe>(
   'probes',
@@ -294,4 +293,36 @@ export function renderOverview(v: View): string {
       <summary>本机网络与系统代理</summary>
       <div class="network-body"><pre>${esc(v.network || '正在读取…')}</pre></div>
     </details>`;
+}
+
+export function initOverviewPanel(panel: HTMLElement, _app: AppShellApi): PanelHandle {
+  panel.addEventListener('click', event => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('#show-probes, #enable-auto-nodes');
+    if (!btn || btn.disabled) return;
+    if (btn.id === 'show-probes') {
+      const details = panel.querySelector<HTMLDetailsElement>('.probe-panel');
+      if (details) {
+        details.open = true;
+        details.scrollIntoView({ block: 'start' });
+        details.querySelector('summary')?.focus();
+      }
+    } else if (btn.id === 'enable-auto-nodes') {
+      const state = _app.getState();
+      if (!state) return;
+      btn.disabled = true;
+      void _app
+        .saveSettings({ ...state.settings, manual_nodes_only: false })
+        .then(() => _app.showToast('已恢复自动节点识别，正在读取实际连接记录。'))
+        .finally(() => {
+          btn.disabled = false;
+        });
+    }
+  });
+
+  return {
+    render(view) {
+      if (!view) return;
+      panel.innerHTML = renderOverview(view);
+    },
+  };
 }

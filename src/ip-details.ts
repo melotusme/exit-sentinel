@@ -1,8 +1,10 @@
 // IP location / network details dialog and nearby public places.
+import { enableLightDismiss, openModal } from './confirm';
 import { mapLinks } from './maps';
 import { geoCache } from './overview';
+import type { AppShellApi } from './store';
 import { esc, icon, time } from './ui';
-import type { Json } from './types';
+import type { IpModalHandle, Json } from './types';
 
 export interface DetailDeps {
   dialog: HTMLDialogElement;
@@ -187,5 +189,46 @@ export async function loadPlaces(ip: string, generation = requestGeneration) {
       b.innerHTML = `${icon('pin')}重新查询附近公开地址`;
     }
   }
+}
+
+export function initIpDetailsModal(
+  dialog: HTMLDialogElement,
+  app: AppShellApi,
+  onAfterClose?: () => void
+): IpModalHandle {
+  enableLightDismiss(dialog, () => {
+    dialog.dataset.ip = '';
+    requestGeneration++;
+    onAfterClose?.();
+  });
+
+  initIpDetails({
+    dialog,
+    call: (name, args) => app.call(name, args, { silent: true }),
+    probeIp: id => app.getState()?.probes.find(p => p.id === id)?.ip || null,
+    lockScroll: () => {},
+    rememberOpener: (modal, trigger) => openModal(modal, trigger),
+    onGeoLoaded: () => {},
+  });
+
+  dialog.addEventListener('click', event => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('#close-dialog, #nearby');
+    if (!btn || btn.disabled) return;
+    if (btn.id === 'close-dialog') dialog.close();
+    else if (btn.id === 'nearby' && dialog.dataset.ip) void loadPlaces(dialog.dataset.ip);
+  });
+
+  return {
+    openLookup(trigger) {
+      openIpLookup(trigger);
+    },
+    async openIp(ip, force = false, trigger) {
+      openIpLookup(trigger);
+      await showIpDetails(ip, force);
+    },
+    async openProbe(probeId, force = false, trigger) {
+      await showDetails(probeId, force, trigger);
+    },
+  };
 }
 
