@@ -31,7 +31,7 @@ flowchart TB
     AI -->|"trace / STUN 或参考出口 / 地区"| Exit
     Client -->|"节点身份与路由快照"| Route
     State -->|"按需保存"| Local[("settings.json<br/>设置 / 历史 / 人工状态")]
-    Verdict -->|"monitor-state 事件"| UI["TypeScript 界面<br/>概览 / IP 与节点<br/>curl / 设置"]
+    Verdict -->|"monitor-state 事件"| UI["TypeScript 界面<br/>概览 / 记录与历史<br/>网络工具 / 设置"]
     Verdict -->|"图标与菜单"| Tray["系统托盘 / 菜单栏"]
 ```
 
@@ -113,15 +113,14 @@ Gemini 的地区受限指 Google 返回 `CHN`、`HKG` 或 `MAC`；其他服务�
 
 ## 功能
 
-- 国内 / 国外 IPv4、IPv6 检测站独立监控；可设置是否要求 IPv6 可用。
+- 国内 / 国外 IPv4、IPv6 检测站独立监控，直接显示出口运营商，并支持按本机物理网卡源地址做国内局域网出口对照；可设置是否要求 IPv6 可用。
 - 显示当前出口链路是有线还是无线（无线时显示 Wi-Fi 名称），穿过 TUN / VPN 虚拟网卡找到真实网卡；链路切换记入变化记录。macOS 读取 Wi-Fi 名称需要授予定位权限，应用不读取位置。
-- macOS 托盘菜单展开时，在菜单内右键即可确认已知变化。
-- 顶部「IP 查询」可手动输入任意公网 IPv4 / IPv6，查看归属地、ASN、运营商、保守网络类型参考、时区及邮编；地理信息本地缓存，支持重新获取。查询不会加入监控或 IP 记录库。
+- macOS 托盘菜单展开时，在菜单内右键即可确认已知变化；Windows 左键单击托盘图标可直接打开或聚焦主窗口。
+- 「网络工具」整合网站连通性（五阶段 curl 耗时瀑布图与原始请求响应）、IP 归属查询（输入任意公网 IPv4 / IPv6 查看归属地、ASN、运营商、保守网络类型参考、时区、邮编及附近公开地点，本地缓存且支持重新获取，不加入监控库）与按地区找节点（按城市、州、国家或 IP 搜索接近节点）。
 - 美国出口显示是否为无州级销售税州；阿拉斯加额外提示地方销售税。参见 [销售税规则](docs/SALES-TAX.md)。
-- 概览页给出 Claude / Gemini 当前判定（可以使用 / 需要确认 / 有风险），由当前出口 IP、当前节点的人工状态和连通性合成，可一键标记。
-- Claude / Gemini 分别记录路径、IP、代理节点快照（macOS Shadowrocket / Windows 与 Linux Clash Verge Rev）及人工可用状态；导入的节点与实时节点按名称 + 服务器地址匹配。
-- 网站 curl 诊断：状态码、阶段耗时、原始请求与响应，支持复制。
-- 列表支持筛选、排序、分页和独立偏好记忆。
+- 概览页给出 Claude / Gemini 当前判定（可以使用 / 需要确认 / 有风险），由当前出口 IP、当前节点的人工状态和连通性合成，支持一键标记与撤回。
+- 「记录与历史」集中管理 Claude / Gemini 的路径、IP 记录与代理节点库（macOS Shadowrocket / Windows 与 Linux Clash Verge Rev，支持单条删除、批量导入与备份清理），导入的节点与实时节点按名称 + 服务器地址匹配，并记录全部出口与路由变化历史。
+- 列表支持关键字与分类筛选、排序、分页和独立偏好记忆。
 - 菜单栏 / 设置页开机自启开关；关闭窗口后后台运行。
 - 从公开的 GitHub Release 自动检查更新，无需登录；下载后验证签名再安装并重启，可关闭自动检查。
 
@@ -158,7 +157,7 @@ brew install --cask melotusme/exit-sentinel/exit-sentinel
 
 ## WebDAV / 坚果云
 
-设置 → WebDAV 配置同步：默认坚果云目录 `https://dav.jianguoyun.com/dav/`，填写账号和第三方应用密码，或点击“从本机 Clash Verge 导入”。自动创建 `ExitSentinel/` 子目录，专用文件 `exit-sentinel-v1.json` 不与 Clash Verge 备份混用。
+设置 → 云同步：默认坚果云目录 `https://dav.jianguoyun.com/dav/`，填写账号和第三方应用密码，或点击“从本机 Clash Verge 导入”。自动创建 `ExitSentinel/` 子目录，专用文件 `exit-sentinel-v1.json` 不与 Clash Verge 备份混用。
 
 连接保存到本机 `webdav.json`；应用密码存 macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service，读取时不返回界面。每台电脑分别配置凭据。
 
