@@ -62,6 +62,7 @@ impl Drop for Scratch {
     }
 }
 
+#[cfg(test)]
 pub fn execute(id: &str, name: &str, url: &str, proxy: &str) -> Result<Report, String> {
     execute_family(id, name, url, proxy, "auto")
 }

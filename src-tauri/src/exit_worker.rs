@@ -254,24 +254,35 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
     let (mut claude_watch, mut gemini_watch) = (Watch::default(), Watch::default());
     let mut alerts = Alerts::default();
     let mut previous_running = false;
+    let mut seen_refresh = 0u64;
     loop {
         if !crate::shutdown::wait_until_active_or_exit().await {
             break;
         }
-        let (paused, settings, generation, network) = {
+        let (paused, settings, generation, network, manual_seq) = {
             let d = lock(&s);
-            (d.view.paused, d.view.settings.clone(), d.generation, d.view.network.clone())
+            (
+                d.view.paused,
+                d.view.settings.clone(),
+                d.generation,
+                d.view.network.clone(),
+                d.manual_refresh_seq,
+            )
         };
         if paused {
             alerts = Alerts::default();
             previous_running = false;
+            seen_refresh = manual_seq;
             tokio::select! {
                 biased;
                 _ = crate::shutdown::wait_for_shutdown() => {}
+                _ = s.exit_wake.notified() => {}
                 _ = tokio::time::sleep(TICK) => {}
             }
             continue;
         }
+        let force_refresh = manual_seq != seen_refresh;
+        seen_refresh = manual_seq;
         if crate::shutdown::is_shutting_down() {
             continue;
         }
@@ -302,7 +313,7 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
         let claude_path = |fp: String| format!("{}|{}|{}", settings.claude_proxy, network, fp);
         let every = if is_running { interval } else { interval.max(IDLE_RECHECK) };
         if !crate::shutdown::is_shutting_down()
-            && claude_watch.due(&claude_path(fingerprint("claude")), every, just_started)
+            && claude_watch.due(&claude_path(fingerprint("claude")), every, just_started || force_refresh)
         {
             let records_before = records_signature(&s);
             let observed = tokio::select! {
@@ -345,7 +356,7 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
 
         let gemini_path = |fp: String| format!("{}|{}|{}|{}", settings.gemini_proxy, settings.gemini_ip_url, network, fp);
         if !crate::shutdown::is_shutting_down()
-            && gemini_watch.due(&gemini_path(fingerprint("gemini")), interval.max(GOOGLE_RECHECK), false)
+            && gemini_watch.due(&gemini_path(fingerprint("gemini")), interval.max(GOOGLE_RECHECK), force_refresh)
         {
             let records_before = records_signature(&s);
             tokio::select! {
@@ -371,6 +382,7 @@ pub async fn run(app: tauri::AppHandle, s: Shared) {
         tokio::select! {
             biased;
             _ = crate::shutdown::wait_for_shutdown() => {}
+            _ = s.exit_wake.notified() => {}
             _ = tokio::time::sleep(TICK) => {}
         }
     }

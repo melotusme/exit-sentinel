@@ -38,6 +38,7 @@ fn read(path: &Path) -> Result<String, String> {
     }
     String::from_utf8(bytes).map_err(|_| "unreadable".into())
 }
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn home() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     let name = "USERPROFILE";
@@ -48,6 +49,7 @@ fn home() -> Result<PathBuf, String> {
         .ok_or("unreadable".into())
 }
 fn roots(client: &str) -> Result<Vec<PathBuf>, String> {
+    #[cfg(not(target_os = "windows"))]
     let h = home()?;
     #[cfg(target_os = "macos")]
     return Ok(match client {

@@ -1,6 +1,6 @@
 //! "Find nodes near this address": resolve the address, place every known node, rank by closeness.
 use crate::region::{self, Place};
-use crate::{cached_geo, lock, model, net, Shared};
+use crate::{cached_geo_for_app, lock, model, net, Shared};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -84,10 +84,10 @@ async fn geocode_throttled(query: &str, proxy: &str) -> Result<Place, String> {
 
 /// Where the user means: an IP (located with ipwho.is), a place name from the built-in table,
 /// or anything else through OpenStreetMap.
-async fn resolve_target(s: &Shared, query: &str) -> Result<Place, String> {
+async fn resolve_target(app: Option<&tauri::AppHandle>, s: &Shared, query: &str) -> Result<Place, String> {
     if query.parse::<std::net::IpAddr>().is_ok() {
         let ip = model::public_ip(query)?;
-        let g = cached_geo(s, &ip, false).await?;
+        let g = cached_geo_for_app(app, s, &ip, false).await?;
         return Ok(place_from_geo(&g, format!("IP 定位（ipwho.is）：{ip}")));
     }
     let local = region::parse_query(query, "内置地名表");
@@ -176,12 +176,16 @@ pub fn rank(target: &Place, nodes: Vec<(String, String, String, Vec<ServiceStatu
 }
 
 #[tauri::command]
-pub async fn find_nodes_near(query: String, s: tauri::State<'_, Shared>) -> Result<FindResult, String> {
+pub async fn find_nodes_near(
+    query: String,
+    app: tauri::AppHandle,
+    s: tauri::State<'_, Shared>,
+) -> Result<FindResult, String> {
     let query = query.trim();
     if query.is_empty() || query.chars().count() > 200 {
         return Err("请输入地址、城市或 IP（最多 200 字）".into());
     }
-    let target = resolve_target(&s, query).await?;
+    let target = resolve_target(Some(&app), &s, query).await?;
     let (nodes, total) = collect_nodes(&s);
     let (matches, unplaced) = rank(&target, nodes);
     Ok(FindResult { target, matches, unplaced, total })

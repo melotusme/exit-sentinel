@@ -15,10 +15,10 @@
         "label": "main",
         "visible": false,
         "title": "出口哨兵 · Exit Sentinel",
-        "width": 1120,
-        "height": 820,
-        "minWidth": 820,
-        "minHeight": 620
+        "width": 1080,
+        "height": 740,
+        "minWidth": 780,
+        "minHeight": 560
       }
     ],
     "security": {
@@ -35,7 +35,8 @@
     "category": "public.app-category.utilities",
     "icon": [
       "icons/icon.png",
-      "icons/icon.icns"
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "macOS": {
       "signingIdentity": "-",

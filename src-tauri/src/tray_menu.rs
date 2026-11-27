@@ -1,5 +1,5 @@
 //! Tray menu built from the current view. Rebuilt only when the tray signature changes.
-use crate::ai::{mark_node, mark_service_ip, parse_safety, route_copy_text, run_ai_tests, safety_label, service_target};
+use crate::ai::{mark_node, mark_service_ip, parse_safety, route_copy_text, run_ai_tests, safety_label, service_name, service_target};
 use crate::{
     copy_to_clipboard, diagnostics, get_autostart, intelligence, label, lock, notify, persist, refresh, set_autostart, show, tray,
     verdict, Shared, View,
@@ -46,79 +46,8 @@ pub fn build(
             return Ok(sub);
         };
         let g = geodata.get(ip);
-        let name = p.map(|p| p.isp.as_str()).filter(|s| !s.is_empty()).or_else(|| g
-            .and_then(|g| g["connection"]["isp"].as_str()))
-            .unwrap_or("");
-        let location = g
-            .map(|g| {
-                ["country", "region", "city"]
-                    .iter()
-                    .filter_map(|k| g[*k].as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            })
-            .unwrap_or_default();
-        let postal = g.and_then(|g| g["postal"].as_str()).unwrap_or("");
-        let org = g
-            .and_then(|g| g["connection"]["org"].as_str())
-            .unwrap_or("");
-        let asn = g
-            .and_then(|g| g["connection"]["asn"].as_u64())
-            .map(|n| format!("AS{n}"))
-            .unwrap_or_default();
-        let timezone = g.and_then(|g| g["timezone"]["id"].as_str()).unwrap_or("");
-        let network_type = g.map(intelligence::classification).unwrap_or_default();
-        let tax = g.map(intelligence::sales_tax).unwrap_or_default();
-        let mut rows = vec![
-            ("ip", "IP 地址", ip.to_string()),
-            (
-                "sales-tax",
-                "美国免税州",
-                tax["label"].as_str().unwrap_or("待查询").into(),
-            ),
-            (
-                "sales-tax-note",
-                "税务说明",
-                tax["note"].as_str().unwrap_or("").into(),
-            ),
-            (
-                "network-type",
-                "网络类型",
-                network_type["label"].as_str().unwrap_or("待查询").into(),
-            ),
-            (
-                "network-basis",
-                "类型依据",
-                network_type["basis"].as_str().unwrap_or("待查询").into(),
-            ),
-            ("name", "运营商 ISP", name.to_string()),
-            ("location", "位置", location),
-            ("postal", "当地邮编（IP 定位）", postal.into()),
-            ("org", "所属组织", org.into()),
-            ("asn", "ASN", asn),
-            ("timezone", "时区", timezone.into()),
-        ];
-        if let Some(g) = g {
-            if let (Some(lat), Some(lon)) =
-                (g["latitude"].as_f64(), g["longitude"].as_f64())
-            {
-                if let Some(nearby) = nearbydata.get(&format!("{lat:.3},{lon:.3}")) {
-                    if let Some(place) = nearby["places"].as_array().and_then(|a| a.first())
-                    {
-                        rows.push((
-                            "address",
-                            "附近公开地址",
-                            place["address"].as_str().unwrap_or("").into(),
-                        ));
-                        rows.push((
-                            "place-postal",
-                            "地点邮编",
-                            place["postal"].as_str().unwrap_or("").into(),
-                        ));
-                    }
-                }
-            }
-        }
+        let probe_isp = p.map(|p| p.isp.as_str()).unwrap_or("");
+        let rows = geo_detail_rows(group, ip, probe_isp, g, nearbydata);
         let hint = MenuItem::with_id(
             app,
             format!("{group}-hint"),
@@ -130,23 +59,18 @@ pub fn build(
         sub.append(&PredefinedMenuItem::separator(app)?)?;
         for (field, label, value) in rows {
             let id = format!("copy:{group}:{field}");
-            let text = if value.is_empty() {
-                format!(
-                    "{label}：{}",
-                    if g.is_some() {
-                        "未提供"
-                    } else {
-                        "待查询（可打开详情重试）"
-                    }
-                )
-            } else {
-                format!("{label}：{value}")
-            };
-            let item = MenuItem::with_id(app, &id, text, !value.is_empty(), None::<&str>)?;
-            if !value.is_empty() {
-                copies.insert(id, value);
-            }
+            let item = MenuItem::with_id(app, &id, format!("{label}：{value}"), true, None::<&str>)?;
+            copies.insert(id, value);
             sub.append(&item)?;
+        }
+        if g.is_none() {
+            sub.append(&MenuItem::with_id(
+                app,
+                format!("{group}-geo-pending"),
+                "归属地与 ASN：待查询（可打开完整详情查看）",
+                false,
+                None::<&str>,
+            )?)?;
         }
         sub.append(&PredefinedMenuItem::separator(app)?)?;
         let detail = MenuItem::with_id(
@@ -404,6 +328,78 @@ pub fn build(
     Ok(menu)
 }
 
+/// Copyable non-empty geography rows for an exit submenu.
+/// US state sales-tax rows are shown only on non-domestic US exits, and empty fields are omitted.
+pub(crate) fn geo_detail_rows(
+    group: &str,
+    ip: &str,
+    probe_isp: &str,
+    g: Option<&Value>,
+    nearbydata: &BTreeMap<String, Value>,
+) -> Vec<(&'static str, &'static str, String)> {
+    let mut rows = vec![("ip", "IP 地址", ip.to_string())];
+    let Some(g) = g else {
+        if !probe_isp.trim().is_empty() {
+            rows.push(("name", "运营商 ISP", probe_isp.trim().to_string()));
+        }
+        return rows;
+    };
+    let is_us_foreign = !group.starts_with("domestic")
+        && g["country_code"]
+            .as_str()
+            .is_some_and(|c| c.eq_ignore_ascii_case("US"));
+    let mut push = |field: &'static str, label: &'static str, value: String| {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            rows.push((field, label, trimmed.to_string()));
+        }
+    };
+    let location = ["country", "region", "city"]
+        .iter()
+        .filter_map(|k| g[*k].as_str().map(str::trim).filter(|s| !s.is_empty()))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    push("location", "位置", location);
+    if is_us_foreign {
+        let tax = intelligence::sales_tax(g);
+        push("sales-tax", "美国免税州", tax["label"].as_str().unwrap_or("").into());
+        push("sales-tax-note", "税务说明", tax["note"].as_str().unwrap_or("").into());
+    }
+    let network_type = intelligence::classification(g);
+    push("network-type", "网络类型", network_type["label"].as_str().unwrap_or("").into());
+    push("network-basis", "类型依据", network_type["basis"].as_str().unwrap_or("").into());
+    let isp = if !probe_isp.trim().is_empty() {
+        probe_isp
+    } else {
+        g["connection"]["isp"].as_str().unwrap_or("")
+    };
+    push("name", "运营商 ISP", isp.into());
+    push("org", "所属组织", g["connection"]["org"].as_str().unwrap_or("").into());
+    if let Some(n) = g["connection"]["asn"].as_u64() {
+        push("asn", "ASN", format!("AS{n}"));
+    }
+    push("postal", "当地邮编（IP 定位）", g["postal"].as_str().unwrap_or("").into());
+    push("timezone", "时区", g["timezone"]["id"].as_str().unwrap_or("").into());
+    if let (Some(lat), Some(lon)) = (g["latitude"].as_f64(), g["longitude"].as_f64()) {
+        if let Some(nearby) = nearbydata.get(&format!("{lat:.3},{lon:.3}")) {
+            if let Some(place) = nearby["places"].as_array().and_then(|a| a.first()) {
+                push("address", "附近公开地址", place["address"].as_str().unwrap_or("").into());
+                push("place-postal", "地点邮编", place["postal"].as_str().unwrap_or("").into());
+            }
+        }
+    }
+    rows
+}
+
+pub(crate) fn prefill_ai_ip(v: &View, service: &str) -> String {
+    v.verdicts
+        .iter()
+        .find(|x| x.service == service)
+        .and_then(|x| x.ip.clone())
+        .or_else(|| service_target(v, service).map(|(ip, _)| ip))
+        .unwrap_or_default()
+}
+
 /// Google and Gemini share one exit judgement: the country Google assigns on the Gemini path.
 /// Claude's detail already carries the Cloudflare trace location.
 pub fn site_detail(detail: &str, id: &str, gemini: &crate::claude::Monitor) -> String {
@@ -568,7 +564,9 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
                 if crate::shutdown::is_shutting_down() { return; }
                 let result = match parse_safety(&parts[1]) { Ok(status) => mark_node(&shared, &parts[0], &parts[2], status, None, true).await, Err(e) => Err(e) };
                 if crate::shutdown::is_shutting_down() { return; }
-                let message = result.map(|_| "节点状态已保存（无需 IP）".to_string()).unwrap_or_else(|e| e);
+                let message = result
+                    .map(|_| format!("{} · 节点状态已保存（无需 IP）", service_name(&parts[0])))
+                    .unwrap_or_else(|e| e);
                 let _ = app.emit("ai-status-saved", &message);
                 notify(&app, &shared, "出口哨兵 · 节点登记", &message);
                 refresh(&app, &shared);
@@ -590,7 +588,7 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             if crate::shutdown::is_shutting_down() { return; }
             let body = match result {
                 Err(e) => e,
-                Ok(()) => lock(&shared).view.ai_tests.iter().map(|t| format!("{}：{} · IPv4 {} · IPv6 {}", t.service, t.http_code.map(|c| format!("HTTP {c}")).unwrap_or_else(|| "连接失败".into()), t.ip.as_deref().unwrap_or("未确认"), t.ipv6.as_deref().unwrap_or("未确认"))).collect::<Vec<_>>().join("\n"),
+                Ok(()) => lock(&shared).view.ai_tests.iter().map(|t| format!("{}：{} · IPv4 {} · IPv6 {}", service_name(&t.service), t.http_code.map(|c| format!("HTTP {c}")).unwrap_or_else(|| "连接失败".into()), t.ip.as_deref().unwrap_or("未确认"), t.ipv6.as_deref().unwrap_or("未确认"))).collect::<Vec<_>>().join("\n"),
             };
             notify(&app, &shared, "出口哨兵 · AI 服务测试完成", &body);
         });
@@ -600,7 +598,9 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         let parts = event.id.as_ref().splitn(4, ':').collect::<Vec<_>>();
         if parts.len() == 4 {
             let result = parse_safety(parts[2]).and_then(|status| mark_service_ip(&s, parts[1], parts[3], status));
-            let message = result.map(|_| format!("{} · {} 状态已保存", parts[1], parts[3])).unwrap_or_else(|e| e);
+            let message = result
+                .map(|_| format!("{} · {} 状态已保存", service_name(parts[1]), parts[3]))
+                .unwrap_or_else(|e| e);
             let _ = app.emit("ai-status-saved", &message);
             notify(app, &s, "出口哨兵 · IP 登记", &message);
             refresh(app, &s);
@@ -610,8 +610,9 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     if event.id.as_ref().starts_with("ai-register:") {
         let parts = event.id.as_ref().split(':').collect::<Vec<_>>();
         if parts.len() == 3 {
+            let known_ip = prefill_ai_ip(&lock(&s).view, parts[1]);
             show(app);
-            let _ = app.emit_to("main", "open-ai-ip", serde_json::json!({"service":parts[1],"status":parts[2],"ip":"","note":""}));
+            let _ = app.emit_to("main", "open-ai-ip", serde_json::json!({"service":parts[1],"status":parts[2],"ip":known_ip,"note":""}));
         }
         return;
     }
@@ -698,7 +699,7 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
                 notify(app, &s, "出口哨兵 · 定位设置", &error);
             }
         }
-        "check" => s.wake.notify_one(),
+        "check" => crate::trigger_check_now(app, &s),
         "ack" => {
             crate::clear_pending_changes(&mut lock(&s).view);
             refresh(app, &s);
@@ -725,7 +726,9 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::site_detail;
+    use super::{geo_detail_rows, prefill_ai_ip, site_detail};
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn google_and_gemini_show_google_assigned_region() {
@@ -740,5 +743,56 @@ mod tests {
         m.country.clear();
         m.country_error = Some("超时".into());
         assert_eq!(site_detail("HTTP 200", "gemini", &m), "HTTP 200 · 出口地区未读取到");
+    }
+
+    #[test]
+    fn geo_rows_hide_us_sales_tax_outside_foreign_us_and_omit_empty_fields() {
+        let nearby = BTreeMap::new();
+        assert_eq!(
+            geo_detail_rows("domestic", "223.5.5.5", "", None, &nearby),
+            vec![("ip", "IP 地址", "223.5.5.5".to_string())]
+        );
+        assert_eq!(
+            geo_detail_rows("domestic", "223.5.5.5", "中国联通", None, &nearby),
+            vec![
+                ("ip", "IP 地址", "223.5.5.5".to_string()),
+                ("name", "运营商 ISP", "中国联通".to_string()),
+            ]
+        );
+
+        let cn_geo = json!({
+            "country": "China",
+            "country_code": "CN",
+            "region": "Beijing",
+            "postal": "",
+            "connection": {"asn": 4134, "isp": "Chinanet", "org": ""}
+        });
+        let cn_rows = geo_detail_rows("domestic", "223.5.5.5", "中国电信", Some(&cn_geo), &nearby);
+        assert!(cn_rows.iter().all(|(k, _, v)| *k != "sales-tax" && *k != "sales-tax-note" && !v.is_empty()));
+        assert!(cn_rows.iter().any(|(k, _, v)| *k == "name" && v == "中国电信"));
+        assert!(!cn_rows.iter().any(|(k, _, _)| *k == "postal" || *k == "org"));
+
+        let jp_geo = json!({"country": "Japan", "country_code": "JP", "region": "Tokyo"});
+        let jp_rows = geo_detail_rows("foreign", "203.0.113.8", "", Some(&jp_geo), &nearby);
+        assert!(!jp_rows.iter().any(|(k, _, _)| *k == "sales-tax"));
+
+        let us_geo = json!({"country": "United States", "country_code": "US", "region": "Oregon"});
+        let us_rows = geo_detail_rows("foreign", "8.8.8.8", "", Some(&us_geo), &nearby);
+        assert!(us_rows.iter().any(|(k, _, v)| *k == "sales-tax" && v.contains("免税州")));
+        // Even if an IP happens to resolve to US, domestic exit submenu omits US sales tax clutter.
+        let domestic_us = geo_detail_rows("domestic", "8.8.8.8", "", Some(&us_geo), &nearby);
+        assert!(!domestic_us.iter().any(|(k, _, _)| *k == "sales-tax"));
+    }
+
+    #[test]
+    fn manual_ip_register_prefills_known_service_exit_ip() {
+        let mut v = crate::View::default();
+        assert_eq!(prefill_ai_ip(&v, "claude"), "");
+        v.verdicts.push(crate::verdict::Verdict {
+            service: "claude".into(),
+            ip: Some("2606:4700:4700::1111".into()),
+            ..Default::default()
+        });
+        assert_eq!(prefill_ai_ip(&v, "claude"), "2606:4700:4700::1111");
     }
 }

@@ -81,6 +81,7 @@ struct Data {
     view: View,
     network_tracker: Tracker,
     generation: u64,
+    manual_refresh_seq: u64,
     geocache: HashMap<String, (u64, Value)>,
     nearby_cache: HashMap<String, (u64, Value)>,
     geo_attempts: HashMap<String, Instant>,
@@ -90,6 +91,8 @@ struct Data {
 struct Shared {
     data: Arc<Mutex<Data>>,
     wake: Arc<Notify>,
+    route_wake: Arc<Notify>,
+    exit_wake: Arc<Notify>,
     path: PathBuf,
     geo_fetch: Arc<tokio::sync::Mutex<()>>,
 }
@@ -259,7 +262,7 @@ fn label(s: &str) -> &str {
         "usable" => "AI 出口已标记可用 · 辅助检测异常",
         "changed" => "变化待确认",
         "warn" => "AI 出口待确认",
-        "split" => "多个出口 · 正常监控",
+        "split" => "国内外分流 · 正常监控",
         "stable" => "出口一致 · 正常监控",
         _ => "等待首次检测",
     }
@@ -448,10 +451,25 @@ fn copy_to_clipboard(value: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 // IP metadata is persistent and reused until explicit refresh or bounded eviction.
+#[cfg(test)]
 async fn cached_geo(s: &Shared, ip: &str, force: bool) -> Result<Value, String> {
-    cached_geo_scoped(s, ip, force, None).await
+    cached_geo_scoped(None, s, ip, force, None).await
 }
-async fn cached_geo_scoped(s: &Shared, ip: &str, force: bool, expected: Option<u64>) -> Result<Value, String> {
+pub(crate) async fn cached_geo_for_app(
+    app: Option<&tauri::AppHandle>,
+    s: &Shared,
+    ip: &str,
+    force: bool,
+) -> Result<Value, String> {
+    cached_geo_scoped(app, s, ip, force, None).await
+}
+async fn cached_geo_scoped(
+    app: Option<&tauri::AppHandle>,
+    s: &Shared,
+    ip: &str,
+    force: bool,
+    expected: Option<u64>,
+) -> Result<Value, String> {
     let _fetch = s.geo_fetch.lock().await;
     let (proxy, generation) = {
         let mut d = lock(s);
@@ -491,6 +509,11 @@ async fn cached_geo_scoped(s: &Shared, ip: &str, force: bool, expected: Option<u
         intelligence::insert_cache(&mut d.geocache, ip.into(), (stamp(), value.clone()));
     }
     persist(s);
+    if let Some(app) = app {
+        if !shutdown::is_shutting_down() {
+            let _ = app.emit("geography-updated", vec![ip.to_string()]);
+        }
+    }
     Ok(value)
 }
 fn load_tray_geography(app: tauri::AppHandle, s: Shared) {
@@ -512,7 +535,7 @@ fn load_tray_geography(app: tauri::AppHandle, s: Shared) {
             let result = tokio::select! {
                 biased;
                 _ = shutdown::wait_for_shutdown() => break,
-                r = cached_geo_scoped(&s, &ip, false, Some(generation)) => r,
+                r = cached_geo_scoped(Some(&app), &s, &ip, false, Some(generation)) => r,
             };
             if result.is_ok() && !shutdown::is_shutting_down() {
                 refresh(&app, &s);
@@ -561,9 +584,27 @@ fn set_autostart(
 fn get_state(s: tauri::State<Shared>) -> View {
     lock(&s).view.clone()
 }
+pub(crate) fn trigger_check_now(app: &tauri::AppHandle, s: &Shared) {
+    let active = {
+        let mut d = lock(s);
+        if d.view.paused {
+            false
+        } else {
+            d.view.checking = true;
+            d.manual_refresh_seq = d.manual_refresh_seq.wrapping_add(1);
+            true
+        }
+    };
+    if active {
+        refresh(app, s);
+        s.wake.notify_one();
+        s.route_wake.notify_one();
+        s.exit_wake.notify_one();
+    }
+}
 #[tauri::command]
-fn check_now(s: tauri::State<Shared>) {
-    s.wake.notify_one();
+fn check_now(app: tauri::AppHandle, s: tauri::State<Shared>) {
+    trigger_check_now(&app, &s);
 }
 #[tauri::command]
 fn acknowledge(app: tauri::AppHandle, s: tauri::State<Shared>) {
@@ -786,7 +827,7 @@ async fn lookup_geo(
     s: tauri::State<'_, Shared>,
 ) -> Result<Value, String> {
     let ip = model::public_ip(&ip)?;
-    let value = cached_geo(&s, &ip, force.unwrap_or(false)).await?;
+    let value = cached_geo_for_app(Some(&app), &s, &ip, force.unwrap_or(false)).await?;
     refresh(&app, &s);
     Ok(value)
 }
@@ -840,6 +881,7 @@ fn diagnostics_window_visible(app: &tauri::AppHandle) -> bool {
 async fn route_worker(app: tauri::AppHandle, s: Shared) {
     let mut last_run: Option<Instant> = None;
     let mut last_settings = String::new();
+    let mut seen_refresh = 0u64;
     loop {
         if !shutdown::wait_until_active_or_exit().await {
             break;
@@ -848,22 +890,35 @@ async fn route_worker(app: tauri::AppHandle, s: Shared) {
             tokio::select! {
                 biased;
                 _ = shutdown::wait_for_shutdown() => continue,
+                _ = s.route_wake.notified() => {}
                 _ = tokio::time::sleep(ROUTE_POLL_VISIBLE) => {}
             }
         }
         if shutdown::is_shutting_down() {
             continue;
         }
-        let (settings, generation, paused) = {
+        let (settings, generation, paused, manual_seq) = {
             let d = lock(&s);
-            (d.view.settings.clone(), d.generation, d.view.paused)
+            (
+                d.view.settings.clone(),
+                d.generation,
+                d.view.paused,
+                d.manual_refresh_seq,
+            )
         };
+        if paused {
+            seen_refresh = manual_seq;
+            continue;
+        }
+        let force = manual_seq != seen_refresh;
+        seen_refresh = manual_seq;
         let settings_key = format!("{}|{}|{}", settings.claude_proxy, settings.gemini_proxy, settings.manual_nodes_only);
         let hidden_wait = Duration::from_secs(settings.interval).max(ROUTE_POLL_HIDDEN_MIN);
-        let due = last_settings != settings_key
+        let due = force
+            || last_settings != settings_key
             || main_window_visible(&app)
             || last_run.map_or(true, |t| t.elapsed() >= hidden_wait);
-        if !paused && due {
+        if due {
             let targets = [
                 ("claude", settings.claude_proxy.as_str()),
                 ("gemini", settings.gemini_proxy.as_str()),
@@ -1176,6 +1231,8 @@ fn main() {
                 path,
                 geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
                 wake: Arc::new(Notify::new()),
+                route_wake: Arc::new(Notify::new()),
+                exit_wake: Arc::new(Notify::new()),
                 data: Arc::new(Mutex::new(Data {
                     tray_signature: String::new(),
                     emitted_view: String::new(),
@@ -1209,6 +1266,7 @@ fn main() {
                         }),
                     },
                     generation: 0,
+                    manual_refresh_seq: 0,
                     network_tracker: Tracker::default(),
                     geocache: saved.geocache,
                     nearby_cache: saved.nearby_cache,
@@ -1235,12 +1293,25 @@ fn main() {
             }
             app.manage(s.clone());
             app.manage(diagnostics::Shared::default());
-            TrayIconBuilder::with_id("sentinel")
+            let tray_builder = TrayIconBuilder::with_id("sentinel")
                 .icon(tray_image("starting"))
                 .icon_as_template(false)
                 .tooltip("出口哨兵 · 等待检测")
-                .on_menu_event(tray_menu::on_event)
-                .build(app)?;
+                .on_menu_event(tray_menu::on_event);
+            #[cfg(not(target_os = "macos"))]
+            let tray_builder = tray_builder
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show(tray.app_handle());
+                    }
+                });
+            tray_builder.build(app)?;
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
@@ -1292,7 +1363,9 @@ fn main() {
             updates::install_update,
             get_state,
             ai::save_claude_ip,
+            ai::delete_claude_ip,
             ai::save_ai_node,
+            ai::delete_ai_node,
             ai::copy_ai_route,
             ai::test_ai_services,
             get_autostart,
@@ -1339,52 +1412,60 @@ fn main() {
 }
 
 #[cfg(test)]
+pub(crate) fn test_shared(path: PathBuf, saved: Saved) -> Shared {
+    Shared {
+        path,
+        wake: Arc::new(Notify::new()),
+        route_wake: Arc::new(Notify::new()),
+        exit_wake: Arc::new(Notify::new()),
+        geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
+        data: Arc::new(Mutex::new(Data {
+            tray_signature: String::new(),
+            emitted_view: String::new(),
+            emitted_checked: String::new(),
+            copy_values: HashMap::new(),
+            view: View {
+                verdicts: vec![],
+                gemini: claude::Monitor::default(),
+                ai_nodes: saved.ai_nodes,
+                current_routes: vec![],
+                ai_tests: saved.ai_tests,
+                ai_testing: false,
+                claude: claude::Monitor::default(),
+                claude_ips: saved.claude_ips,
+                settings: saved.settings,
+                probes: vec![],
+                service_health: vec![],
+                history: saved.history,
+                network: String::new(),
+                uplink: link::Uplink::default(),
+                paused: false,
+                checking: false,
+                unacknowledged: false,
+                status: String::new(),
+                issues: vec![],
+                pending_changes: vec![],
+                last_check: String::new(),
+                notification_error: None,
+                storage_error: None,
+            },
+            network_tracker: Tracker::default(),
+            generation: 0,
+            manual_refresh_seq: 0,
+            geocache: saved.geocache,
+            nearby_cache: saved.nearby_cache,
+            geo_attempts: HashMap::new(),
+            nearby_attempt: None,
+        })),
+    }
+}
+
+#[cfg(test)]
 mod cache_tests {
     use super::*;
     use crate::ai::{mark_service_ip, parse_safety};
     fn shared(path: PathBuf, saved: Saved) -> Shared {
-        Shared {
-            path,
-            wake: Arc::new(Notify::new()),
-            geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
-            data: Arc::new(Mutex::new(Data {
-                tray_signature: String::new(),
-                    emitted_view: String::new(),
-                    emitted_checked: String::new(),
-                copy_values: HashMap::new(),
-                view: View {
-                    verdicts: vec![],
-                    gemini: claude::Monitor::default(),
-                    ai_nodes: saved.ai_nodes,
-                    current_routes: vec![],
-                    ai_tests: saved.ai_tests,
-                    ai_testing: false,
-                    claude: claude::Monitor::default(),
-                    claude_ips: saved.claude_ips,
-                    settings: saved.settings,
-                    probes: vec![],
-                    service_health: vec![],
-                    history: saved.history,
-                    network: String::new(),
-                    uplink: link::Uplink::default(),
-                    paused: false,
-                    checking: false,
-                    unacknowledged: false,
-                    status: String::new(),
-                    issues: vec![],
-                    pending_changes: vec![],
-                    last_check: String::new(),
-                    notification_error: None,
-                    storage_error: None,
-                },
-                network_tracker: Tracker::default(),
-                generation: 0,
-                geocache: saved.geocache,
-                nearby_cache: saved.nearby_cache,
-                geo_attempts: HashMap::new(),
-                nearby_attempt: None,
-            })),
-        }
+        test_shared(path, saved)
     }
     #[test]
     fn clear_scopes_preserve_settings_and_persist_empty_paused_state() {
@@ -1646,5 +1727,19 @@ mod status_tests {
         assert_eq!(derive_status(&v), "warn");
         v.verdicts[1].level = verdict::Level::Risk;
         assert_eq!(derive_status(&v), "risk");
+    }
+
+    #[test]
+    fn split_status_uses_split_routing_copy() {
+        let v = View {
+            probes: vec![
+                probe("cn-ipip", "domestic", Some("223.5.5.5")),
+                probe("global-cf", "foreign", Some("8.8.8.8")),
+            ],
+            verdicts: vec![verdict(verdict::Level::Safe), verdict(verdict::Level::Safe)],
+            ..Default::default()
+        };
+        assert_eq!(derive_status(&v), "split");
+        assert_eq!(label("split"), "国内外分流 · 正常监控");
     }
 }

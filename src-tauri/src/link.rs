@@ -161,6 +161,7 @@ mod macos_wifi {
 }
 
 /// Outcome of asking for the permission that unlocks the Wi-Fi name.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WifiPermission {
     /// The system prompt was shown.

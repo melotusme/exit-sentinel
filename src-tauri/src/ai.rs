@@ -60,6 +60,13 @@ pub(crate) fn remember_observed_route(v: &mut View, service: &str, ip: &str) {
         shadowrocket::remember(&mut record.routes, route);
     }
 }
+pub(crate) fn service_name(service: &str) -> &str {
+    match service {
+        "claude" => "Claude",
+        "gemini" => "Gemini",
+        other => other,
+    }
+}
 pub(crate) fn route_copy_text(v: &View, service: &str, ip: Option<&str>) -> Result<String, String> {
     let route = if let Some(ip) = ip {
         v.claude_ips
@@ -70,7 +77,7 @@ pub(crate) fn route_copy_text(v: &View, service: &str, ip: Option<&str>) -> Resu
         v.current_routes.iter().find(|r| r.service == service)
     };
     let r = route.ok_or("暂无节点快照；请先检测或等待新记录")?;
-    Ok(format!("服务：{service}\n出口 IP：{}\n配置：{}\n模式：{}\n策略链：{}\n节点：{}\n节点服务器：{}\n节点 ID：{}\n来源：{}\n记录时间：{}\n证据：{}\n提示：{}", ip.unwrap_or("未确认；仅当前配置快照"), r.config, r.mode, r.chain.join(" → "), r.node_name, r.node_host, r.node_id, r.subscription, r.last_seen, r.basis, r.error))
+    Ok(format!("服务：{}\n出口 IP：{}\n配置：{}\n模式：{}\n策略链：{}\n节点：{}\n节点服务器：{}\n节点 ID：{}\n来源：{}\n记录时间：{}\n证据：{}\n提示：{}", service_name(service), ip.unwrap_or("未确认；仅当前配置快照"), r.config, r.mode, r.chain.join(" → "), r.node_name, r.node_host, r.node_id, r.subscription, r.last_seen, r.basis, r.error))
 }
 #[tauri::command]
 pub(crate) fn copy_ai_route(
@@ -125,12 +132,48 @@ pub(crate) fn mark_service_ip(
         push_event(
             &mut d,
             "手动设置 AI 服务 IP",
-            &format!("{service} · {ip} → {}", safety_label(&status)),
+            &format!("{} · {ip} → {}", service_name(service), safety_label(&status)),
         );
     }
     persist(s);
     if let Some(e) = lock(s).view.storage_error.clone() {
         Err(format!("状态已在内存生效，但保存失败：{e}"))
+    } else {
+        Ok(())
+    }
+}
+pub(crate) fn delete_service_ip(s: &Shared, service: &str, ip: &str) -> Result<(), String> {
+    {
+        let mut d = lock(s);
+        let removed = claude::remove(&mut d.view.claude_ips, service, ip)?;
+        d.view.verdicts = compute_verdicts(&d.view);
+        push_event(
+            &mut d,
+            "删除 AI 服务 IP 记录",
+            &format!("{} · {}", service_name(service), removed.ip),
+        );
+    }
+    persist(s);
+    if let Some(e) = lock(s).view.storage_error.clone() {
+        Err(format!("记录已在内存删除，但保存失败：{e}"))
+    } else {
+        Ok(())
+    }
+}
+pub(crate) fn delete_service_node(s: &Shared, service: &str, key: &str) -> Result<(), String> {
+    {
+        let mut d = lock(s);
+        let removed = shadowrocket::remove_node(&mut d.view.ai_nodes, service, key)?;
+        d.view.verdicts = compute_verdicts(&d.view);
+        push_event(
+            &mut d,
+            "删除 AI 服务节点记录",
+            &format!("{} · {}", service_name(service), removed.route.node_name),
+        );
+    }
+    persist(s);
+    if let Some(e) = lock(s).view.storage_error.clone() {
+        Err(format!("节点已在内存删除，但保存失败：{e}"))
     } else {
         Ok(())
     }
@@ -209,6 +252,29 @@ async fn run_selected_ai_tests(app: tauri::AppHandle, s: Shared, service: Option
         Ok(())
     }
 }
+pub(crate) fn cached_service_route(
+    v: &View,
+    service: &str,
+    key: &str,
+) -> Option<shadowrocket::RouteSnapshot> {
+    v.current_routes
+        .iter()
+        .find(|r| r.service == service && r.fingerprint == key && shadowrocket::registerable(r))
+        .or_else(|| {
+            let live = if service == "claude" { &v.claude } else { &v.gemini };
+            live.route
+                .as_ref()
+                .filter(|r| r.service == service && r.fingerprint == key && shadowrocket::registerable(r))
+        })
+        .or_else(|| {
+            v.ai_tests
+                .iter()
+                .find(|t| t.service == service)
+                .and_then(|t| t.route.as_ref())
+                .filter(|r| r.service == service && r.fingerprint == key && shadowrocket::registerable(r))
+        })
+        .cloned()
+}
 pub(crate) async fn mark_node(
     s: &Shared,
     service: &str,
@@ -222,15 +288,28 @@ pub(crate) async fn mark_node(
         return Err("未知 AI 服务".into());
     }
     let route = if current {
-        let (proxy, manual_only) = {
+        let (proxy, manual_only, cached) = {
             let d = lock(s);
-            (if service == "claude" { d.view.settings.claude_proxy.clone() } else { d.view.settings.gemini_proxy.clone() }, d.view.settings.manual_nodes_only)
+            (
+                if service == "claude" {
+                    d.view.settings.claude_proxy.clone()
+                } else {
+                    d.view.settings.gemini_proxy.clone()
+                },
+                d.view.settings.manual_nodes_only,
+                cached_service_route(&d.view, service, key),
+            )
         };
-        let route = shadowrocket::selected_capture(service, &proxy, manual_only).await;
-        if route.fingerprint != key {
+        let live = shadowrocket::selected_capture(service, &proxy, manual_only).await;
+        if live.fingerprint == key && shadowrocket::registerable(&live) {
+            live
+        } else if !shadowrocket::registerable(&live) {
+            cached.ok_or_else(|| {
+                "代理客户端选择已变化或读取失败，请等待刷新后登记当前节点".to_string()
+            })?
+        } else {
             return Err("代理客户端选择已变化或读取失败，请等待刷新后登记当前节点".into());
         }
-        route
     } else {
         lock(s)
             .view
@@ -252,7 +331,8 @@ pub(crate) async fn mark_node(
                 .unwrap_or_default()
         });
         let detail = format!(
-            "{service} · {} · {} → {}（节点登记，IP 未关联）",
+            "{} · {} · {} → {}（节点登记，IP 未关联）",
+            service_name(service),
             route.config,
             route.node_name,
             safety_label(&status)
@@ -268,6 +348,28 @@ pub(crate) async fn mark_node(
         return Err(format!("状态已在内存生效，但保存失败：{e}"));
     }
     Ok(())
+}
+#[tauri::command]
+pub(crate) fn delete_claude_ip(
+    service: String,
+    ip: String,
+    app: tauri::AppHandle,
+    s: tauri::State<Shared>,
+) -> Result<(), String> {
+    let result = delete_service_ip(&s, &service, &ip);
+    refresh(&app, &s);
+    result
+}
+#[tauri::command]
+pub(crate) fn delete_ai_node(
+    service: String,
+    key: String,
+    app: tauri::AppHandle,
+    s: tauri::State<Shared>,
+) -> Result<(), String> {
+    let result = delete_service_node(&s, &service, &key);
+    refresh(&app, &s);
+    result
 }
 #[tauri::command]
 pub(crate) async fn save_ai_node(
@@ -365,5 +467,55 @@ mod manual_test_tests {
         let claude = records.iter().find(|r| r.service == "claude").unwrap();
         assert_eq!(claude.time, "new");
         assert_eq!(claude.http_code, Some(200));
+    }
+
+    #[tokio::test]
+    async fn delete_ip_and_node_and_fallback_current_node_capture() {
+        let path = std::env::temp_dir().join(format!("sentinel-ai-delete-test-{}", std::process::id()));
+        let mut saved = crate::Saved::default();
+        // Force live capture to return non-registerable ("仅手动导入") so fallback is deterministically exercised.
+        saved.settings.manual_nodes_only = true;
+        claude::upsert(&mut saved.claude_ips, "claude", "8.8.8.8", claude::Safety::Safe, "keep-gemini".into(), "t0").unwrap();
+        claude::upsert(&mut saved.claude_ips, "gemini", "8.8.8.8", claude::Safety::Risk, "gemini-note".into(), "t0").unwrap();
+        let s = crate::test_shared(path.clone(), saved);
+
+        // Resilient current=true node registration falls back to observed RouteSnapshot in View when live capture aged out.
+        {
+            let mut d = lock(&s);
+            d.view.current_routes.push(shadowrocket::RouteSnapshot {
+                service: "claude".into(),
+                config: "Clash Verge Rev / Mihomo".into(),
+                node_name: "US-West-01".into(),
+                node_host: "us1.example".into(),
+                fingerprint: "clash:aged-connection".into(),
+                consistent: true,
+                ..Default::default()
+            });
+        }
+        mark_node(&s, "claude", "clash:aged-connection", claude::Safety::Safe, Some("verified".into()), true)
+            .await
+            .unwrap();
+        // Mismatched fingerprint still rejects.
+        assert!(mark_node(&s, "claude", "clash:other", claude::Safety::Safe, None, true).await.is_err());
+
+        // Single-record IP deletion isolates by service and persists.
+        delete_service_ip(&s, "claude", "8.8.8.8").unwrap();
+        assert!(delete_service_ip(&s, "claude", "8.8.8.8").is_err());
+        {
+            let d = lock(&s);
+            assert_eq!(d.view.claude_ips.len(), 1);
+            assert_eq!(d.view.claude_ips[0].service, "gemini");
+            assert_eq!(d.view.ai_nodes.len(), 1);
+            assert_eq!(d.view.ai_nodes[0].status, claude::Safety::Safe);
+        }
+
+        // Single-record Node deletion removes the target node and persists.
+        delete_service_node(&s, "claude", "clash:aged-connection").unwrap();
+        assert!(delete_service_node(&s, "claude", "clash:aged-connection").is_err());
+        let persisted: crate::Saved =
+            serde_json::from_slice(&std::fs::read(path.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(persisted.claude_ips.len(), 1);
+        assert!(persisted.ai_nodes.is_empty());
+        let _ = std::fs::remove_dir_all(path);
     }
 }

@@ -113,6 +113,24 @@ pub fn upsert_node(
     }
     Ok(())
 }
+pub fn remove_node(
+    records: &mut Vec<NodeRecord>,
+    service: &str,
+    key: &str,
+) -> Result<NodeRecord, String> {
+    if !["claude", "gemini"].contains(&service) {
+        return Err("未知 AI 服务".into());
+    }
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("节点标识无效".into());
+    }
+    let index = records
+        .iter()
+        .position(|r| r.service == service && r.key == trimmed)
+        .ok_or_else(|| "未找到该节点记录".to_string())?;
+    Ok(records.remove(index))
+}
 impl RouteSnapshot {
     pub fn summary(&self) -> String {
         if !self.error.is_empty() {
@@ -164,6 +182,7 @@ async fn read_snapshots(services: Vec<String>) -> Vec<Result<RouteSnapshot, Stri
         Err(e) => vec![Err(e); count],
     }
 }
+#[cfg(target_os = "macos")]
 fn finish(service: &str, proxy: &str, read: Result<RouteSnapshot, String>) -> RouteSnapshot {
     let mut snapshot = read.unwrap_or_else(|error| RouteSnapshot { service: service.into(), error, ..Default::default() });
     if snapshot.error.is_empty() && !proxy.is_empty() && proxy != "direct" {

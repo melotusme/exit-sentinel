@@ -42,6 +42,7 @@ pub struct Monitor {
     pub source: String,
     pub error: Option<String>,
 }
+#[cfg(any(test, target_os = "macos"))]
 pub fn is_claude_process(line: &str) -> bool {
     let line = line.trim();
     line.ends_with("/Claude.app/Contents/MacOS/Claude")
@@ -113,6 +114,25 @@ pub fn upsert(
         });
     }
     Ok(())
+}
+pub fn remove(
+    records: &mut Vec<IpRecord>,
+    service: &str,
+    ip: &str,
+) -> Result<IpRecord, String> {
+    if !["claude", "gemini"].contains(&service) {
+        return Err("未知 AI 服务".into());
+    }
+    let trimmed = ip.trim();
+    if trimmed.is_empty() {
+        return Err("IP 格式无效".into());
+    }
+    let normalized = public_ip(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    let index = records
+        .iter()
+        .position(|r| r.service == service && (r.ip == normalized || r.ip == trimmed))
+        .ok_or_else(|| "未找到该 IP 记录".to_string())?;
+    Ok(records.remove(index))
 }
 /// Called only on a fresh, successful probe while the main app process is running.
 /// Returns a warning for first observation regardless of manually assigned safety.

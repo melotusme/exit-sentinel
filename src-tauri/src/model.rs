@@ -33,6 +33,7 @@ pub const IGNORABLE_CHECKS: &[(&str, &str)] = &[
     ("site:google", "Google 网站访问"),
     ("site:claude", "Claude 网站访问"),
     ("site:gemini", "Gemini 网站访问"),
+    ("site:antigravity", "Antigravity 网站访问"),
     ("probe:cn-ipip", "国内 · IPIP"),
     ("probe:cn-3322", "国内 · 3322"),
     ("probe:global-cf", "国外 · Cloudflare"),
@@ -306,6 +307,19 @@ mod tests {
         assert!(s.validate().is_err());
         s.foreign_proxy.clear();
         s.interval = 0;
+        assert!(s.validate().is_err());
+    }
+    #[test]
+    fn ignorable_checks_include_antigravity_and_reject_unknown() {
+        let mut s = Settings::default();
+        s.ignored_checks = vec![
+            "site:google".into(),
+            "site:claude".into(),
+            "site:gemini".into(),
+            "site:antigravity".into(),
+        ];
+        assert!(s.validate().is_ok());
+        s.ignored_checks.push("site:unknown".into());
         assert!(s.validate().is_err());
     }
     #[test]
