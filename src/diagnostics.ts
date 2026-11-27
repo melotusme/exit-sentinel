@@ -1,8 +1,13 @@
+// Network Workbench (`网络工具`):
+// Sub-tabs: `网站连通性` (`curl`) | `IP 归属查询` (`ip-lookup`) | `按地区找节点` (`find`).
+
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { findNear, renderNodeFinder } from './node-finder';
+import { createIpIntelController } from './ip-details';
+import { findNear, renderNodeFinder, resetNodeFinder } from './node-finder';
 import type { AppShellApi } from './store';
-import type { PanelHandle } from './types';
+import type { PanelHandle, View } from './types';
+import { copyToClipboard, esc, icon, time } from './ui';
 
 export type Report = {
   id: string;
@@ -27,262 +32,495 @@ export type DiagState = {
   error: string | null;
 };
 
-const sites: Array<[string, string, string]> = [
-  ['baidu', '百度', '国内'],
-  ['bing', '必应中国', '国内'],
-  ['google', 'Google', '国外'],
-  ['cloudflare', 'Cloudflare', '国外'],
-  ['apple', 'Apple', '国外'],
-  ['github', 'GitHub', '国外'],
-  ['claude', 'Claude', '独立'],
-  ['gemini', 'Gemini', '独立'],
+interface SiteDef {
+  id: string;
+  label: string;
+}
+
+interface SiteGroup {
+  title: string;
+  items: SiteDef[];
+}
+
+const SITE_GROUPS: SiteGroup[] = [
+  {
+    title: 'AI 服务',
+    items: [
+      { id: 'claude', label: 'Claude' },
+      { id: 'gemini', label: 'Gemini' },
+    ],
+  },
+  {
+    title: '海外站点',
+    items: [
+      { id: 'google', label: 'Google' },
+      { id: 'cloudflare', label: 'Cloudflare' },
+      { id: 'github', label: 'GitHub' },
+      { id: 'apple', label: 'Apple' },
+      { id: 'bing', label: 'Bing' },
+    ],
+  },
+  {
+    title: '国内站点',
+    items: [{ id: 'baidu', label: 'Baidu' }],
+  },
 ];
 
-const esc = (s: unknown) =>
-  String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+const ALL_SITE_IDS = SITE_GROUPS.flatMap(g => g.items.map(i => i.id));
 
-let state: DiagState = { running: false, selected: 'baidu', reports: {}, error: null },
-  selected = 'baidu',
-  family = 'auto',
-  section = 'trace',
-  message = '';
+type InspectorSection = 'trace' | 'headers' | 'body' | 'command';
 
-const ms = (s: unknown) => (typeof s === 'number' ? `${(s * 1000).toFixed(1)} ms` : '—');
-const msNum = (s: unknown) => (typeof s === 'number' && Number.isFinite(s) ? Math.max(0, s * 1000) : 0);
+const INSPECTOR_TABS: Array<[InspectorSection, string]> = [
+  ['trace', '连接跟踪 Trace'],
+  ['headers', '响应头 Headers'],
+  ['body', '响应体预览 Body'],
+  ['command', '等价 curl 命令'],
+];
+
+let state: DiagState = { running: false, selected: 'claude', reports: {}, error: null };
+let selected = 'claude';
+let family: 'auto' | '4' | '6' = 'auto';
+let section: InspectorSection = 'trace';
+let copyFeedback = '';
+
+const secToMs = (s: unknown): number =>
+  typeof s === 'number' && Number.isFinite(s) && s > 0 ? s * 1000 : 0;
+
+const fmtMs = (msVal: number | null): string =>
+  msVal === null || !Number.isFinite(msVal) ? '—' : `${msVal.toFixed(1)} ms`;
+
+function fmtBytes(n: unknown): string {
+  const b = Number(n);
+  if (!Number.isFinite(b) || b < 0) return '—';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function isPublicLookupIp(ip: string | null | undefined): boolean {
+  if (!ip) return false;
+  const s = ip.trim().toLowerCase();
+  if (!s || s === '::1' || s.startsWith('fe80:') || s.startsWith('fc') || s.startsWith('fd')) return false;
+  if (
+    s.startsWith('127.') ||
+    s.startsWith('10.') ||
+    s.startsWith('192.168.') ||
+    s.startsWith('198.18.') ||
+    s.startsWith('198.19.') ||
+    s.startsWith('169.254.')
+  ) {
+    return false;
+  }
+  const m172 = /^172\.(\d+)\./.exec(s);
+  if (m172) {
+    const second = Number(m172[1]);
+    if (second >= 16 && second <= 31) return false;
+  }
+  return true;
+}
+
+function summarizeProxyPath(rawPath: string | undefined): string {
+  if (!rawPath) return '默认分流策略';
+  if (rawPath.startsWith('显式代理：')) {
+    const raw = rawPath.replace('显式代理：', '').trim();
+    return raw
+      .replace(/^http:\/\//i, 'HTTP ')
+      .replace(/^https:\/\//i, 'HTTPS ')
+      .replace(/^socks5h?:\/\//i, 'SOCKS5 ');
+  }
+  if (rawPath.startsWith('direct：')) return '直连 (Direct)';
+  if (rawPath.includes('本机路由 / TUN')) return '系统路由 / TUN';
+  return rawPath;
+}
+
+function findMatchingPublicExit(siteId: string, v: View | undefined): string | null {
+  if (!v) return null;
+  if (siteId === 'claude') return v.verdicts.find(x => x.service === 'claude')?.ip || v.claude.ip || null;
+  if (siteId === 'gemini' || siteId === 'google') {
+    return v.verdicts.find(x => x.service === 'gemini')?.ip || v.gemini.ip || null;
+  }
+  if (siteId === 'baidu' || siteId === 'bing') {
+    return v.probes.find(p => p.group === 'domestic' && p.ip)?.ip || null;
+  }
+  return v.probes.find(p => p.group === 'foreign' && p.ip)?.ip || null;
+}
 
 export function getDiagnosticsState() {
+  const reportKey = (id: string) => (family === 'auto' ? id : `${id}@${family}`);
   return {
     state,
     selected,
-    testedCount: sites.filter(([id]) => state.reports[family === 'auto' ? id : `${id}@${family}`]).length,
-    totalCount: sites.length,
+    testedCount: ALL_SITE_IDS.filter(id => Boolean(state.reports[reportKey(id)])).length,
+    totalCount: ALL_SITE_IDS.length,
   };
 }
 
-export function renderDiagnosticsTab(): string {
-  const r = state.reports[family === 'auto' ? selected : `${selected}@${family}`],
-    m = r?.metrics || {};
-  const status = !r
-    ? '尚未测试'
-    : r.exit_code === 63
-      ? `HTTP ${m.http_code} · 已连接（正文超限截断）`
-      : r.exit_code !== 0
-        ? `curl 失败 · 退出码 ${r.exit_code}`
-        : Number(m.http_code) >= 400
-          ? `HTTP ${m.http_code} · 站点返回错误`
-          : `HTTP ${m.http_code} · 响应正常`;
-  const isBad = Boolean(r && (![0, 63].includes(r.exit_code) || Number(m.http_code) >= 400));
-  const raw = r
-    ? section === 'metrics'
-      ? JSON.stringify(m, null, 2)
-      : r[section as 'command' | 'trace' | 'headers' | 'body']
-    : '';
+function isReportOk(rep: Report | undefined): boolean {
+  if (!rep) return false;
+  const code = Number(rep.metrics?.http_code || 0);
+  return [0, 63].includes(rep.exit_code) && code > 0 && code < 400;
+}
 
-  const totalMs = msNum(m.time_total);
-  const dnsMs = msNum(m.time_namelookup);
-  const tcpMs = typeof m.time_connect === 'number' ? Math.max(0, (m.time_connect - (m.time_namelookup || 0)) * 1000) : 0;
-  const tlsMs = m.time_appconnect > 0 ? Math.max(0, (m.time_appconnect - (m.time_connect || 0)) * 1000) : 0;
-  const ttfbMs = msNum(m.time_starttransfer);
-  const baseMax = Math.max(totalMs, ttfbMs, 1);
-  const pct = (v: number) => (r ? Math.min(100, Math.max(v > 0 ? 4 : 0, Math.round((v / baseMax) * 100))) : 0);
+export function renderDiagnosticsTab(v?: View): string {
+  const key = family === 'auto' ? selected : `${selected}@${family}`;
+  const r = state.reports[key];
+  const m = r?.metrics || {};
+  const siteLabel = SITE_GROUPS.flatMap(g => g.items).find(s => s.id === selected)?.label || selected;
+
+  const httpCode = Number(m.http_code || 0);
+  const ok = isReportOk(r);
+  const statusText = !r
+    ? `${siteLabel} · 尚未测试`
+    : r.exit_code === 63 && httpCode > 0 && httpCode < 400
+      ? `HTTP ${httpCode} · 连通正常（正文超 256 KiB 截断）`
+      : r.exit_code !== 0
+        ? `连接失败 · curl 退出码 ${r.exit_code}`
+        : httpCode >= 400
+          ? `HTTP ${httpCode} · 响应受限或异常`
+          : `HTTP ${httpCode} · 连通正常`;
+
+  // Timing breakdown (waterfall offsets + stage durations in ms)
+  const tDnsEnd = secToMs(m.time_namelookup);
+  const tTcpEnd = Math.max(tDnsEnd, secToMs(m.time_connect));
+  const hasTls = typeof m.time_appconnect === 'number' && m.time_appconnect > 0;
+  const tTlsEnd = hasTls ? Math.max(tTcpEnd, secToMs(m.time_appconnect)) : tTcpEnd;
+  const hasTtfb = typeof m.time_starttransfer === 'number' && m.time_starttransfer > 0;
+  const tTtfbEnd = hasTtfb ? Math.max(tTlsEnd, secToMs(m.time_starttransfer)) : tTlsEnd;
+  const tTotal = Math.max(tTtfbEnd, secToMs(m.time_total));
+
+  const dnsDur = r ? tDnsEnd : null;
+  const tcpDur = r && m.time_connect > 0 ? Math.max(0, tTcpEnd - tDnsEnd) : null;
+  const tlsDur = r ? (hasTls ? Math.max(0, tTlsEnd - tTcpEnd) : 0) : null;
+  const ttfbWaitDur = r && hasTtfb ? Math.max(0, tTtfbEnd - tTlsEnd) : null;
+  const transferDur = r && tTotal > 0 ? Math.max(0, tTotal - tTtfbEnd) : null;
+
+  const scaleMax = Math.max(tTotal, 1);
+  const barStyle = (startMs: number, durMs: number | null) => {
+    if (!r || durMs === null || durMs <= 0) return 'left:0%;width:0%';
+    const left = Math.min(96, Math.max(0, (startMs / scaleMax) * 100));
+    const rawW = Math.max(2.5, (durMs / scaleMax) * 100);
+    const width = Math.min(100 - left, rawW);
+    return `left:${left.toFixed(1)}%;width:${width.toFixed(1)}%`;
+  };
+
+  const waterfallStages: Array<{ label: string; start: number; dur: number | null; tone: string }> = [
+    { label: 'DNS 解析', start: 0, dur: dnsDur, tone: 'dns' },
+    { label: 'TCP 握手', start: tDnsEnd, dur: tcpDur, tone: 'tcp' },
+    { label: 'TLS 握手', start: tTcpEnd, dur: tlsDur, tone: 'tls' },
+    { label: '首字节等待 (TTFB)', start: tTlsEnd, dur: ttfbWaitDur, tone: 'ttfb' },
+    { label: '内容传输', start: tTtfbEnd, dur: transferDur, tone: 'transfer' },
+  ];
+
+  // Remote IP & Click-to-Lookup
+  const remoteIp = String(m.remote_ip || '');
+  const remoteIsPublic = isPublicLookupIp(remoteIp);
+  const remoteIsFakeIp = /^198\.(18|19)\./.test(remoteIp);
+  const remoteIsLoopback = remoteIp.startsWith('127.') || remoteIp === '::1';
+  const fallbackPublicExit = !remoteIsPublic ? findMatchingPublicExit(selected, v) : null;
+
+  const remoteCellHtml = !r || !remoteIp
+    ? '<strong class="mono tabular">—</strong>'
+    : remoteIsPublic
+      ? `<div class="stat-ip-row">
+          <strong class="mono tabular nowrap">${esc(remoteIp)}</strong>
+          <button type="button" class="text-button compact" data-ip-modal="${esc(remoteIp)}" title="查看该远端 IP 归属详情">查归属 ↗</button>
+        </div>`
+      : `<div class="stat-ip-row">
+          <strong class="mono tabular nowrap">${esc(remoteIp)}</strong>
+          <span class="stat-subtag">${remoteIsFakeIp ? 'Fake-IP' : remoteIsLoopback ? '本机代理' : '内网对端'}</span>
+          ${
+            fallbackPublicExit
+              ? `<button type="button" class="text-button compact" data-ip-modal="${esc(fallbackPublicExit)}" title="连接经本机代理转发；点击查看实测公网出口 ${esc(fallbackPublicExit)}">查出口 ↗</button>`
+              : ''
+          }
+        </div>`;
+
+  const httpCellText = !r
+    ? '—'
+    : httpCode > 0
+      ? `${httpCode}${m.http_version ? ` (HTTP/${m.http_version})` : ''}`
+      : `未响应 (exit ${r.exit_code})`;
+
+  const tlsVerifyText = !r
+    ? '—'
+    : m.ssl_verify_result === 0 && hasTls
+      ? '证书有效'
+      : m.ssl_verify_result === 0
+        ? '代理解密/未建连'
+        : `校验异常 (${m.ssl_verify_result})`;
+
+  const rawContent = r ? r[section] || '' : '';
+  const inspectorHint =
+    section === 'trace'
+      ? 'curl -v 握手跟踪：* 为 DNS/TCP/TLS/代理阶段，> 为请求头，< 为响应头。'
+      : section === 'headers'
+        ? '服务端返回的完整 HTTP 响应头（含重定向链路）。'
+        : section === 'body'
+          ? '纯文本安全预览（不执行任何 HTML 或脚本，单次上限 256 KiB）。'
+          : '可在系统终端独立复现的等价 curl 命令。';
 
   return `<div class="curl-workspace">
+    <!-- Top Control Bar -->
     <section class="panel curl-toolbar">
-      <div class="curl-sites" role="group" aria-label="测试站点">
-        ${sites
-          .map(([id, name, routeTag]) => {
-            const rep = state.reports[family === 'auto' ? id : `${id}@${family}`];
-            const ok = rep && [0, 63].includes(rep.exit_code) && Number(rep.metrics?.http_code) < 400;
-            return `<button type="button" data-site="${id}" aria-pressed="${selected === id}" class="chip-btn ${selected === id ? 'selected' : ''}">
-              <span class="site-chip-name">${name}</span>
-              <span class="site-route-tag">${routeTag}</span>
-              ${rep ? `<span class="result-dot ${ok ? 'ok' : 'bad'}" title="${ok ? '连通正常' : '连接异常'}"></span>` : ''}
-            </button>`;
-          })
-          .join('')}
+      <div class="curl-site-groups" role="group" aria-label="预设检测站点">
+        ${SITE_GROUPS.map(
+          group => `<div class="curl-site-group">
+            <span class="site-group-label">${esc(group.title)}</span>
+            <div class="site-group-chips">
+              ${group.items
+                .map(item => {
+                  const rep = state.reports[family === 'auto' ? item.id : `${item.id}@${family}`];
+                  const itemOk = isReportOk(rep);
+                  const isSel = selected === item.id;
+                  return `<button
+                    type="button"
+                    data-site="${item.id}"
+                    aria-pressed="${isSel}"
+                    class="chip-btn site-chip ${isSel ? 'selected' : ''}"
+                  >
+                    ${rep ? `<span class="result-dot ${itemOk ? 'ok' : 'bad'}" aria-hidden="true"></span>` : ''}
+                    <span>${esc(item.label)}</span>
+                  </button>`;
+                })
+                .join('')}
+            </div>
+          </div>`
+        ).join('')}
       </div>
-      <div class="curl-actions">
-        ${[['auto', '自动'], ['4', 'IPv4'], ['6', 'IPv6']].map(([id, label]) => `<button type="button" data-family="${id}" aria-pressed="${family === id}" ${state.running ? 'disabled' : ''}>${label}</button>`).join('')}
-        <button type="button" id="curl-run" class="primary" ${state.running ? 'disabled' : ''}>${state.running ? '正在执行 curl…' : '测试当前站点'}</button>
-        <button type="button" id="curl-all" ${state.running ? 'disabled' : ''}>全部测试 (8)</button>
+
+      <div class="curl-actions-row">
+        <div class="segmented-control" role="group" aria-label="IP 地址族">
+          ${(
+            [
+              ['auto', '自动'],
+              ['4', 'IPv4'],
+              ['6', 'IPv6'],
+            ] as const
+          )
+            .map(
+              ([id, label]) =>
+                `<button type="button" data-family="${id}" aria-pressed="${family === id}" ${state.running ? 'disabled' : ''}>${label}</button>`
+            )
+            .join('')}
+        </div>
+
+        <div class="curl-run-buttons">
+          <button type="button" id="curl-run" class="primary" ${state.running ? 'disabled' : ''}>
+            ${icon('play')}<span>${state.running ? '正在执行…' : '测试当前站点'}</span>
+          </button>
+          <button type="button" id="curl-ai" ${state.running ? 'disabled' : ''}>
+            <span>测试 AI 服务</span>
+          </button>
+          <button type="button" id="curl-all" ${state.running ? 'disabled' : ''}>
+            <span>全部测试</span>
+          </button>
+        </div>
       </div>
     </section>
 
-    <div class="curl-main ${r ? '' : 'is-empty'}">
-      <section class="panel curl-summary">
+    <!-- 2-Column Diagnostics Workspace -->
+    <div class="curl-main">
+      <!-- Left: Status + Timing Waterfall + 2x4 Summary Grid -->
+      <section class="panel curl-summary" aria-label="连接耗时与摘要指标">
         <div class="curl-status-header">
-          <div class="curl-status ${!r ? 'neutral' : isBad ? 'bad' : 'ok'}" role="status">
+          <div class="curl-status ${!r ? 'neutral' : ok ? 'ok' : 'bad'}" role="status">
             <span class="status-dot"></span>
-            <span>${state.running ? '测试进行中 · ' : ''}${esc(status)}</span>
+            <span>${state.running ? '测试运行中 · ' : ''}${esc(statusText)}</span>
           </div>
-          ${r ? `<span class="curl-timestamp">${esc(new Date(r.time).toLocaleString('zh-CN', { hour12: false }))}</span>` : ''}
+          ${r ? `<span class="curl-timestamp tabular">${esc(time(r.time))}</span>` : ''}
         </div>
-        <div class="curl-target">${esc(r?.url || '选择上方站点，再点击“测试当前站点”。')}</div>
-        ${!r ? '<p class="curl-note">先测试需要排查的站点。完成后会显示连接结果、各阶段耗时和原始日志；也可以一次测试全部站点。</p>' : ''}
-        ${r ? `<p class="curl-note">${esc(r.path)} · ${family === 'auto' ? '自动' : `IPv${family}`} · GET · 最多 15 秒 · HTTPS 证书校验</p>` : ''}
-        ${r ? '<p class="curl-note">地址族约束适用于 curl 建立连接的对端；使用代理时，该对端可能是代理，不能确认代理到目标的协议。</p>' : ''}
 
-        <div class="curl-waterfall">
-          <div class="waterfall-title">阶段耗时分布</div>
-          ${[
-            ['DNS 解析', dnsMs, ms(m.time_namelookup)],
-            ['TCP 握手', tcpMs, ms(typeof m.time_connect === 'number' ? Math.max(0, m.time_connect - m.time_namelookup) : null)],
-            ['TLS 协商', tlsMs, ms(m.time_appconnect > 0 ? Math.max(0, m.time_appconnect - m.time_connect) : null)],
-            ['首字节 TTFB', ttfbMs, ms(m.time_starttransfer)],
-            ['总计耗时', totalMs, ms(m.time_total)],
-          ]
+        <div class="curl-target mono">${esc(r?.url || `已选择 ${siteLabel}，点击「测试当前站点」或「测试 AI 服务」开始诊断`)}</div>
+
+        ${state.error ? `<div class="curl-error" role="alert">${esc(state.error)}</div>` : ''}
+        ${r?.truncated ? `<div class="ip-inline-alert warn">响应体达到 256 KiB 安全读取上限并截断（curl 退出码 63 属正常截断保护，并非断网）。</div>` : ''}
+
+        <div class="curl-waterfall" aria-label="HTTP 阶段耗时瀑布图">
+          <div class="waterfall-head">
+            <h3>HTTP 阶段耗时瀑布图</h3>
+            <span class="mono tabular muted small">总计 ${esc(r ? fmtMs(tTotal) : '—')}</span>
+          </div>
+          ${waterfallStages
             .map(
-              ([label, val, textVal]) => `<div class="waterfall-row">
-                <span class="waterfall-label">${label}</span>
-                <div class="waterfall-track"><div class="waterfall-bar" style="width:${pct(val as number)}%"></div></div>
-                <strong class="waterfall-val">${esc(textVal)}</strong>
+              st => `<div class="waterfall-row">
+                <span class="waterfall-label">${esc(st.label)}</span>
+                <div class="waterfall-track">
+                  <div class="waterfall-bar tone-${st.tone}" style="${barStyle(st.start, st.dur)}"></div>
+                </div>
+                <strong class="waterfall-val mono tabular">${esc(fmtMs(st.dur))}</strong>
               </div>`
             )
             .join('')}
         </div>
 
-        <div class="curl-stats">
-          ${[
-            ['总耗时', ms(m.time_total)],
-            ['DNS 解析', ms(m.time_namelookup)],
-            ['TCP 建连', ms(typeof m.time_connect === 'number' ? Math.max(0, m.time_connect - m.time_namelookup) : null)],
-            ['TLS 握手', ms(m.time_appconnect > 0 ? Math.max(0, m.time_appconnect - m.time_connect) : null)],
-            ['首字节 TTFB', ms(m.time_starttransfer)],
-            [/^198\.(18|19)\./.test(m.remote_ip || '') ? '远端 IP (Fake-IP)' : '连接对端 IP', m.remote_ip || '—'],
-            ['本地连接 IP', m.local_ip || '—'],
-            ['HTTP 版本', m.http_version || '—'],
-            [
-              'TLS 校验',
-              r
-                ? m.ssl_verify_result === 0 && m.time_appconnect > 0
-                  ? '通过'
-                  : m.ssl_verify_result === 0
-                    ? '未完成 / 代理终止'
-                    : `失败 ${m.ssl_verify_result}`
-                : '—',
-            ],
-            ['跳转次数', m.num_redirects ?? '—'],
-            ['下载字节', m.size_download ?? '—'],
-            ['curl 退出码', r?.exit_code ?? '—'],
-          ]
-            .map(([k, v]) => `<div class="stat-item"><span>${k}</span><strong>${esc(v)}</strong></div>`)
-            .join('')}
+        <!-- 2x4 Summary Grid (8 Crisp Cells) -->
+        <div class="curl-stats-grid">
+          <div class="stat-item">
+            <span>HTTP 状态码</span>
+            <strong class="mono tabular">${esc(httpCellText)}</strong>
+          </div>
+          <div class="stat-item">
+            <span>总耗时</span>
+            <strong class="mono tabular">${esc(r ? fmtMs(tTotal) : '—')}</strong>
+          </div>
+          <div class="stat-item">
+            <span>远端出口 / 对端 IP</span>
+            ${remoteCellHtml}
+          </div>
+          <div class="stat-item">
+            <span>实际代理通道</span>
+            <strong class="tabular" title="${esc(r?.path || '沿用分流代理设置')}">${esc(r ? summarizeProxyPath(r.path) : '沿用分流代理设置')}</strong>
+          </div>
+          <div class="stat-item">
+            <span>首字节响应 (累计)</span>
+            <strong class="mono tabular">${esc(r && hasTtfb ? fmtMs(tTtfbEnd) : '—')}</strong>
+          </div>
+          <div class="stat-item">
+            <span>TLS 证书校验</span>
+            <strong>${esc(tlsVerifyText)}</strong>
+          </div>
+          <div class="stat-item">
+            <span>下载大小 / 重定向</span>
+            <strong class="mono tabular">${esc(r ? `${fmtBytes(m.size_download)} · ${m.num_redirects ?? 0} 次` : '—')}</strong>
+          </div>
+          <div class="stat-item">
+            <span>地址族 / 退出码</span>
+            <strong class="mono tabular">${esc(r ? `${family === 'auto' ? '自动' : `IPv${family}`} · exit ${r.exit_code}` : family === 'auto' ? '自动双栈' : `仅 IPv${family}`)}</strong>
+          </div>
         </div>
-        ${m.url_effective ? `<p class="curl-note"><strong>最终 URL：</strong>${esc(m.url_effective)}</p>` : ''}
-        ${r ? '<p class="curl-note">远端 IP 是 curl 建立连接的对端（经代理或 TUN 时可能是代理地址或 Fake-IP）；本地连接 IP 不是公网出口 IP。</p>' : ''}
-        ${r?.truncated ? '<p class="curl-error">正文达到 256 KiB 限制，内容已截断；curl 63 为大小限制，不等于网络断开。</p>' : ''}
-        ${state.error ? `<p class="curl-error">${esc(state.error)}</p>` : ''}
+
+        ${
+          m.url_effective && r && m.url_effective !== r.url
+            ? `<p class="curl-note"><strong>最终跳转地址：</strong><span class="mono">${esc(m.url_effective)}</span></p>`
+            : ''
+        }
       </section>
 
-      <section class="panel curl-raw">
+      <!-- Right: Clean Dark Code / Inspector Pane -->
+      <section class="panel curl-raw" aria-label="原始报文与跟踪日志">
         <div class="curl-raw-head">
-          <div class="curl-tabs" role="group" aria-label="原始输出分区">
-            ${[
-              ['trace', '连接日志'],
-              ['headers', '响应头'],
-              ['body', '响应正文'],
-              ['metrics', '完整指标'],
-              ['command', 'curl 命令'],
-            ]
-              .map(([id, label]) => `<button type="button" data-section="${id}" aria-pressed="${section === id}" class="tab-btn ${section === id ? 'selected' : ''}">${label}</button>`)
-              .join('')}
+          <div class="curl-tabs" role="tablist" aria-label="诊断输出分区">
+            ${INSPECTOR_TABS.map(
+              ([id, label]) =>
+                `<button type="button" role="tab" data-section="${id}" aria-selected="${section === id}" class="tab-btn ${section === id ? 'selected' : ''}">${esc(label)}</button>`
+            ).join('')}
           </div>
           <div class="curl-copy-group">
-            <button type="button" id="curl-copy" ${!r || section === 'metrics' ? 'disabled' : ''}>复制当前</button>
-            <button type="button" id="curl-copy-all" ${!r ? 'disabled' : ''}>复制全部 JSON</button>
+            <button type="button" id="curl-copy" ${!r ? 'disabled' : ''}>
+              ${icon('copy')}<span>复制当前内容</span>
+            </button>
+            <button type="button" id="curl-copy-all" ${!r ? 'disabled' : ''}>
+              <span>复制完整报告</span>
+            </button>
           </div>
         </div>
-        <p class="curl-note">
-          ${
-            section === 'trace'
-              ? 'curl -v 原始 stderr：> 为发出的请求，< 为响应头，* 为 DNS / TCP / TLS / 代理握手过程。'
-              : section === 'body'
-                ? '正文仅作为纯文本显示，不执行返回的 HTML 或脚本；最多展示 256 KiB。'
-                : section === 'command'
-                  ? '可直接在终端重跑的等效命令；应用内部通过独立临时文件收集响应头和正文。'
-                  : '展示当前所选分区的原始输出数据。'
-          }
-        </p>
-        <pre tabindex="0" aria-label="原始 curl 输出">${esc(raw || '暂无输出内容，请先点击站点执行测试。')}</pre>
+
+        <p class="curl-note">${esc(inspectorHint)}</p>
+
+        <pre class="curl-code-viewer" tabindex="0" aria-label="${esc(INSPECTOR_TABS.find(([id]) => id === section)?.[1] || '诊断输出')}">${esc(
+          rawContent || (state.running ? '正在执行系统 curl 并采集握手日志，请稍候…' : '尚未生成报文记录。在上方选择目标站点并点击测试后，此处将展示原始连接跟踪日志、响应头与命令。')
+        )}</pre>
+
         <div class="curl-raw-foot">
-          <span class="curl-feedback" aria-live="polite">${esc(message)}</span>
-          <span class="small muted">不读浏览器 Cookie · 忽略 .curlrc · 仅内存保存 · 沿用分流代理设置</span>
+          <span class="curl-feedback" aria-live="polite">${esc(copyFeedback)}</span>
+          <span class="small muted">独立无痕请求 · 忽略浏览器 Cookie 与 .curlrc · 结果仅驻留内存</span>
         </div>
       </section>
     </div>
   </div>`;
 }
 
-export async function handleDiagnosticsClick(
+async function handleCurlClick(
   b: HTMLButtonElement,
-  onRender: () => void,
-  onToast: (msg: string) => void
+  app: AppShellApi,
+  onRender: () => void
 ): Promise<boolean> {
   if (b.dataset.family) {
-    family = b.dataset.family;
+    family = b.dataset.family as 'auto' | '4' | '6';
+    copyFeedback = '';
     onRender();
     return true;
   }
   if (b.dataset.site) {
     selected = b.dataset.site;
-    message = '';
+    copyFeedback = '';
     onRender();
     return true;
   }
   if (b.dataset.section) {
-    section = b.dataset.section;
-    message = '';
+    section = b.dataset.section as InspectorSection;
+    copyFeedback = '';
     onRender();
     return true;
   }
-  if (b.id === 'curl-run' || b.id === 'curl-all') {
-    message = '';
-    const site = b.id === 'curl-all' ? 'all' : selected;
-    await invoke('run_diagnostics', { site: family === 'auto' ? site : `${site}@${family}` });
+  if (b.id === 'curl-run' || b.id === 'curl-ai' || b.id === 'curl-all') {
+    copyFeedback = '';
+    const target = b.id === 'curl-all' ? 'all' : b.id === 'curl-ai' ? 'ai' : selected;
+    const arg = family === 'auto' ? target : `${target}@${family}`;
+    await app.call('run_diagnostics', { site: arg });
     return true;
   }
   if (b.id === 'curl-copy' || b.id === 'curl-copy-all') {
-    await invoke('copy_diagnostics', { site: family === 'auto' ? selected : `${selected}@${family}`, section: b.id === 'curl-copy-all' ? 'all' : section });
-    message = '已复制到剪贴板';
-    onToast('curl 诊断内容已复制到剪贴板');
+    const key = family === 'auto' ? selected : `${selected}@${family}`;
+    const sec = b.id === 'curl-copy-all' ? 'all' : section;
+    try {
+      await invoke('copy_diagnostics', { site: key, section: sec });
+    } catch {
+      const rep = state.reports[key];
+      if (!rep) return true;
+      const fallbackText = sec === 'all' ? JSON.stringify(rep, null, 2) : rep[section];
+      await copyToClipboard(fallbackText);
+    }
+    copyFeedback = sec === 'all' ? '完整 JSON 报告已复制' : '当前分区内容已复制';
+    app.showToast(copyFeedback);
     onRender();
     return true;
   }
   return false;
 }
 
+let listenersInitialized = false;
+
 export async function initDiagnostics(onUpdate: (openTab?: boolean) => void) {
-  await listen<DiagState>('diagnostics-state', e => {
-    state = e.payload;
-    if (state.running && state.selected) selected = state.selected;
-    onUpdate(false);
-  });
-  await listen('open-diagnostics', () => {
-    onUpdate(true);
-  });
+  if (!listenersInitialized) {
+    listenersInitialized = true;
+    await listen<DiagState>('diagnostics-state', e => {
+      state = e.payload;
+      if (state.running && state.selected && ALL_SITE_IDS.includes(state.selected)) {
+        selected = state.selected;
+      }
+      onUpdate(false);
+    });
+    await listen('open-diagnostics', () => {
+      onUpdate(true);
+    });
+  }
   try {
     state = await invoke<DiagState>('get_diagnostics');
-    selected = state.selected || 'baidu';
+    if (state.selected && ALL_SITE_IDS.includes(state.selected)) {
+      selected = state.selected;
+    }
   } catch {}
 }
 
 export function initDiagnosticsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
   let currentSub = 'curl';
 
-  const repaint = () => {
+  const inlineIpIntel = createIpIntelController(app, {
+    mode: 'inline',
+    getContainer: () => (currentSub === 'ip-lookup' ? panel : null),
+    isActive: () => app.getRoute().tab === 'diagnostics' && currentSub === 'ip-lookup',
+  });
+
+  inlineIpIntel.bindEvents(panel);
+
+  const repaint = (v = app.getState()) => {
     if (currentSub === 'find') {
-      panel.innerHTML = renderNodeFinder();
+      panel.innerHTML = renderNodeFinder(app);
     } else if (currentSub === 'ip-lookup') {
-      panel.innerHTML = `<section class="panel settings">
-        <h2>IP 归属与网络查询</h2>
-        <p class="muted small">输入任意公网 IPv4 或 IPv6 地址，查看归属地、美国销售税州、运营商 ASN、保守网络类型及附近公开地址参考。</p>
-        <form id="inline-ip-lookup-form" class="ip-lookup-controls">
-          <input name="ip" type="text" required maxlength="45" autocomplete="off" spellcheck="false" placeholder="例如 198.51.100.42 或 2001:db8::1">
-          <button type="submit" class="primary">打开查询详情</button>
-        </form>
-      </section>`;
+      panel.innerHTML = inlineIpIntel.renderView(v);
     } else {
-      panel.innerHTML = renderDiagnosticsTab();
+      panel.innerHTML = renderDiagnosticsTab(v);
     }
   };
 
@@ -290,7 +528,11 @@ export function initDiagnosticsPanel(panel: HTMLElement, app: AppShellApi): Pane
     const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
     if (!btn || btn.disabled) return;
     if (currentSub === 'curl') {
-      await handleDiagnosticsClick(btn, repaint, msg => app.showToast(msg));
+      await handleCurlClick(btn, app, () => repaint());
+    } else if (currentSub === 'find' && btn.dataset.nearPreset) {
+      await findNear(app, btn.dataset.nearPreset, () => {
+        if (currentSub === 'find') repaint();
+      });
     }
   });
 
@@ -298,22 +540,26 @@ export function initDiagnosticsPanel(panel: HTMLElement, app: AppShellApi): Pane
     const form = event.target as HTMLFormElement;
     if (form.id === 'near-form') {
       event.preventDefault();
-      const text = String(new FormData(form).get('near-query') || '');
-      void findNear(text, () => {
+      const input = form.querySelector<HTMLInputElement>('#near-query-input');
+      const text = String(input?.value || '').trim();
+      if (!text) {
+        input?.setAttribute('aria-invalid', 'true');
+        input?.focus();
+        return;
+      }
+      input?.setAttribute('aria-invalid', 'false');
+      void findNear(app, text, () => {
         if (currentSub === 'find') repaint();
       });
-    } else if (form.id === 'inline-ip-lookup-form') {
-      event.preventDefault();
-      const ip = String(new FormData(form).get('ip') || '').trim();
-      if (ip) void app.openIpModal(ip);
     }
   });
 
   void initDiagnostics(openTab => {
     if (openTab) {
       void app.navigate('diagnostics', 'curl');
-    } else if (app.getRoute().tab === 'diagnostics' && currentSub === 'curl') {
-      repaint();
+    } else if (app.getRoute().tab === 'diagnostics') {
+      // Refresh header subtab tested badge (`N/8`) and repaint curl view if visible.
+      if (currentSub === 'curl') repaint();
     }
   });
 
@@ -326,9 +572,30 @@ export function initDiagnosticsPanel(panel: HTMLElement, app: AppShellApi): Pane
         { id: 'find', label: '按地区找节点' },
       ];
     },
-    render(_view, activeSub) {
+    render(view, activeSub) {
       currentSub = activeSub || 'curl';
-      repaint();
+      repaint(view);
+    },
+    onDataCleared(scope) {
+      if (scope === 'all') {
+        inlineIpIntel.reset();
+        resetNodeFinder();
+        copyFeedback = '';
+        void initDiagnostics(() => {
+          if (app.getRoute().tab === 'diagnostics') repaint();
+        });
+      }
+    },
+    onNavigatePayload(sub, payload) {
+      if (!payload || typeof payload !== 'object') return;
+      const p = payload as Record<string, unknown>;
+      if (sub === 'ip-lookup' && typeof p.ip === 'string' && p.ip.trim()) {
+        void inlineIpIntel.inspectIp(p.ip.trim(), Boolean(p.force));
+      } else if (sub === 'find' && typeof p.query === 'string' && p.query.trim()) {
+        void findNear(app, p.query.trim(), () => {
+          if (currentSub === 'find') repaint();
+        });
+      }
     },
   };
 }
