@@ -396,6 +396,7 @@ main.app-main:has(> #panel-overview:not([hidden])) #pause-banner {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .evidence-primary {
@@ -404,6 +405,7 @@ main.app-main:has(> #panel-overview:not([hidden])) #pause-banner {
   gap: 6px;
   min-width: 0;
   flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .evidence-ip {
@@ -1283,7 +1285,7 @@ main.app-main:has(> #panel-overview:not([hidden])) #pause-banner {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 920px) {
   .verdict-grid {
     grid-template-columns: 1fr;
   }

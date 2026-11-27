@@ -301,7 +301,7 @@
     width: 30px;
     height: 30px;
     border-radius: 8px;
-    background: var(--accent);
+    background: var(--button-primary);
     color: var(--text-on-accent);
     display: grid;
     place-items: center;
@@ -624,8 +624,8 @@
 @layer components {
   /* Button Variants */
   .primary {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--button-primary);
+    border-color: var(--button-primary);
     color: var(--text-on-accent);
     font-weight: 600;
     box-shadow: var(--shadow-btn);
@@ -633,8 +633,8 @@
 
   @media (hover: hover) {
     .primary:hover:not(:disabled) {
-      background: var(--accent-hover);
-      border-color: var(--accent-hover);
+      background: var(--button-primary-hover);
+      border-color: var(--button-primary-hover);
     }
   }
 
@@ -671,7 +671,7 @@
   @media (hover: hover) {
     .text-button:hover:not(:disabled),
     .ghost-btn:hover:not(:disabled) {
-      background: var(--accent);
+      background: var(--button-primary);
       color: var(--text-on-accent);
       border-color: transparent;
     }

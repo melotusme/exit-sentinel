@@ -653,7 +653,7 @@ details[open] > summary .guide-summary-title::before {
   width: 38px;
   height: 38px;
   border-radius: 10px;
-  background: var(--accent);
+  background: var(--button-primary);
   color: var(--text-on-accent);
   display: grid;
   place-items: center;
