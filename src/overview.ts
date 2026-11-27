@@ -2,11 +2,72 @@
 // Zero-scroll 1080×740 operational overview: unified alert strip, 2-col AI Verdict Deck,
 // 4-col Network Exit & Uplink strip, Recent Changes feed, and collapsible Probe/Proxy snapshots.
 
+import { ListView } from './list';
 import { geoCache, series, type AppShellApi } from './store';
 import type { Event, PanelHandle, Probe, RouteSnapshot, Safety, ServiceHealth, Uplink, Verdict, View } from './types';
 import { ago, esc, formatGeoSummary, icon, safetyText, serviceName, time, titles } from './ui';
 
 export { geoCache, series };
+
+/** Operator belongs to the observed public IP, not the detection site's brand. */
+export function operator(p: Probe): string {
+  if (!p.ip) return '';
+  return p.isp || geoCache.get(p.ip)?.connection?.isp || '';
+}
+
+export const lanRows = (v: View): Probe[] => v.probes.filter(p => Boolean(p.source_ip));
+
+export const lanList = new ListView<Probe>(
+  'lan-egress',
+  {
+    source: { label: '局域网源地址', value: p => p.source_ip || '' },
+    interface: { label: '网卡', value: p => p.source_interface || '' },
+    ip: { label: '公网出口', value: p => p.ip || '' },
+    isp: { label: '运营商', value: operator },
+    target: { label: '检测目标', value: p => p.url },
+  },
+  p => `${p.source_interface || ''} ${p.source_ip || ''} ${p.source_dns || ''} ${p.ip || ''} ${operator(p)} ${p.url} ${p.error || ''}`,
+  p => (p.ip ? 'ok' : p.checked ? 'error' : 'waiting'),
+  { ok: '已测得出口', error: '检测失败', waiting: '等待检测' },
+  {
+    defaultSize: 20,
+    searchPlaceholder: '筛选网卡、源地址、出口 IP 或运营商…',
+    emptyTitle: '尚无本机物理网卡 IPv4 出口对照记录',
+    emptyHint: '连接有线或无线网络后将自动按已分配源地址探测国内出口',
+  }
+);
+
+export function lanRow(p: Probe): string {
+  let host = p.url;
+  try {
+    host = new URL(p.url).hostname;
+  } catch {}
+  return `<article class="lan-egress-row">
+    <div class="lan-col">
+      <strong class="truncate" title="${esc(p.source_interface || '')}">${esc(p.source_interface || '物理网卡')}</strong>
+      <small class="mono tabular">${esc(p.source_ip || '')}${p.source_dns ? ` · ${esc(p.source_dns)}` : ''}</small>
+    </div>
+    <div class="lan-col">
+      <strong class="mono tabular">${esc(p.ip || (p.checked ? '不可达' : '等待检测'))}</strong>
+      <small class="truncate" title="${esc(p.ip ? `运营商：${operator(p) || '未查到'}` : p.error || '')}">${esc(
+        p.ip ? `运营商：${operator(p) || '未查到'}` : p.error || '等待首轮探测'
+      )}</small>
+    </div>
+    <div class="lan-col lan-col-end">
+      <small class="tabular">${esc(host)}${p.checked ? ` · ${esc(ago(p.checked))}` : ''}</small>
+      ${
+        p.ip
+          ? `<div class="tile-actions">
+              <button type="button" class="text-button compact" data-copy-text="${esc(p.ip)}">复制</button>
+              <button type="button" class="text-button compact" data-detail="${esc(p.id)}" aria-label="详情 ${esc(
+                p.source_interface || ''
+              )} ${esc(p.source_ip || '')} ${esc(host)}">详情</button>
+            </div>`
+          : ''
+      }
+    </div>
+  </article>`;
+}
 
 const ISO3_TO_SHORT: Record<string, string> = {
   USA: 'US',
@@ -598,21 +659,39 @@ function renderExitTile(v: View, group: string, title: string): string {
   }
 
   const g = geoCache.get(p.ip);
-  const loc = g
+  const isp = operator(p);
+  const locParts = g
     ? [g.country, g.region, g.city].filter((val, idx, arr) => Boolean(val) && arr.indexOf(val) === idx).join(' · ')
-    : '归属地查询中…';
+    : '';
+  const loc = locParts
+    ? `${locParts} · ${isp || '运营商未查到'}`
+    : isp
+      ? `运营商：${isp}`
+      : g
+        ? '运营商：未查到'
+        : '归属地查询中…';
+  const locTip = [
+    locParts || (g ? '未知归属地' : '归属地待查询'),
+    `运营商：${isp || '未查到'}`,
+  ].join(' · ');
   const isUs = g?.country_code === 'US';
   const taxLabel = isUs ? g?.sales_tax?.label || '' : '';
   const isTaxFree = taxLabel.includes('免');
+  const multiDomestic =
+    group === 'domestic' && new Set(v.probes.filter(x => x.group === 'domestic' && x.ip).map(x => x.ip)).size > 1;
 
-  return `<article class="exit-tile ${v.paused ? 'is-paused' : ''}">
+  return `<article class="exit-tile ${v.paused ? 'is-paused' : ''} ${multiDomestic ? 'is-warn' : ''}">
     <div class="exit-tile-head">
       <span class="exit-tile-title">${esc(title)}</span>
-      <span class="exit-latency tabular">${p.latency} ms</span>
+      ${
+        multiDomestic
+          ? `<span class="exit-tag is-warn" title="国内检测站观测到不同公网出口，请展开下方检测站明细核对">多出口 · ${p.latency} ms</span>`
+          : `<span class="exit-latency tabular">${p.latency} ms</span>`
+      }
     </div>
     <strong class="exit-ip mono tabular ${p.ip.length > 20 ? 'is-ipv6' : ''}" title="${esc(p.ip)}">${esc(p.ip)}</strong>
     <div class="exit-geo">
-      <span class="exit-loc truncate" title="${esc(loc)}">${esc(loc)}</span>
+      <span class="exit-loc truncate" title="${esc(locTip)}">${esc(loc)}</span>
       ${
         taxLabel
           ? `<span class="tax-chip ${isTaxFree ? 'is-free' : 'is-taxed'}" title="${esc(g?.sales_tax?.note || taxLabel)}">${esc(
@@ -709,6 +788,8 @@ export function probeRow(p: Probe): string {
   const dotCls = p.ip ? (p.stable ? 'green' : 'amber') : 'red';
   const groupName = PROBE_GROUP_SHORT[p.group] || p.group;
   const ipText = p.ip || (p.checked ? '不可达' : '待检测');
+  const isp = operator(p);
+  const ipTip = p.ip ? `点击查看 ${p.ip} 详情${isp ? ` · 运营商：${isp}` : ''}` : p.error || '';
   return `<tr>
     <th scope="row" class="probe-col-name" title="${esc(`${p.label} (${groupName})`)}">
       <span class="probe-name-text">${esc(p.label)}</span>
@@ -717,10 +798,10 @@ export function probeRow(p: Probe): string {
       <span class="dot ${dotCls}" aria-hidden="true"></span>
       ${
         p.ip
-          ? `<button type="button" class="probe-ip-btn mono tabular" data-detail="${esc(p.id)}" title="点击查看 ${esc(
+          ? `<button type="button" class="probe-ip-btn mono tabular" data-detail="${esc(p.id)}" title="${esc(ipTip)}">${esc(
               p.ip
-            )} 详情">${esc(p.ip)}</button>`
-          : `<span class="muted" title="${esc(p.error || '')}">${esc(ipText)}</span>`
+            )}</button>`
+          : `<span class="muted" title="${esc(ipTip)}">${esc(ipText)}</span>`
       }
     </td>
     <td class="probe-col-spark">${renderSparkline(p)}</td>
@@ -729,8 +810,9 @@ export function probeRow(p: Probe): string {
 }
 
 function renderProbeLatencyCard(v: View, openFolds: ReadonlySet<string>): string {
-  const total = v.probes.length;
-  const reachable = v.probes.filter(p => Boolean(p.ip));
+  const coreProbes = v.probes.filter(p => !p.source_ip);
+  const total = coreProbes.length;
+  const reachable = coreProbes.filter(p => Boolean(p.ip));
   const avgMs = reachable.length
     ? Math.round(reachable.reduce((acc, p) => acc + p.latency, 0) / reachable.length)
     : null;
@@ -753,9 +835,38 @@ function renderProbeLatencyCard(v: View, openFolds: ReadonlySet<string>): string
           </tr>
         </thead>
         <tbody>
-          ${v.probes.map(probeRow).join('')}
+          ${coreProbes.map(probeRow).join('')}
         </tbody>
       </table>
+    </div>
+  </details>`;
+}
+
+function renderLanEgressCard(v: View, openFolds: ReadonlySet<string>): string {
+  const rows = lanRows(v);
+  const okRows = rows.filter(p => Boolean(p.ip));
+  const distinctIps = new Set(okRows.map(p => p.ip));
+  const isOpen = openFolds.has('lan-egress');
+  const metaLabel =
+    rows.length === 0
+      ? '等待读取网卡'
+      : distinctIps.size > 1
+        ? `观测到 ${distinctIps.size} 个不同出口`
+        : `${okRows.length}/${rows.length} 已测得`;
+
+  return `<details class="panel overview-fold lan-egress-fold" data-fold="lan-egress" ${isOpen ? 'open' : ''}>
+    <summary class="fold-summary">
+      ${icon('chevronRight', 'fold-chevron')}
+      <span class="fold-title tabular">局域网出口对照 · IPv4 (${rows.length})</span>
+      <span class="fold-meta tabular ${distinctIps.size > 1 ? 'is-warn-meta' : ''}">${esc(metaLabel)}</span>
+    </summary>
+    <div class="fold-body lan-egress-body">
+      <p class="lan-egress-note">按本机物理网卡已分配源地址分别直连请求国内检测站（不经过应用 HTTP/SOCKS 代理；遇 Fake-IP 仅对该请求用 AliDNS 真实解析，不改系统 DNS；失败不影响总体状态）。${
+        distinctIps.size > 1
+          ? '<strong>本轮观测到多个公网出口，请对照源地址、检测目标与运营商。</strong>'
+          : '结果仅代表本机已检测的源地址和目标；同一出口不能证明网关无分流，其他电脑需分别检测。'
+      }${v.paused ? ' 监控已暂停，以下为上次检测。' : ''}</p>
+      ${lanList.render(rows, lanRow)}
     </div>
   </details>`;
 }
@@ -871,7 +982,7 @@ export function renderOverview(v: View, openFolds: ReadonlySet<string> = new Set
         </div>
       </div>
       <div class="exit-tiles">
-        ${renderExitTile(v, 'domestic', '国内 IPv4')}
+        ${renderExitTile(v, 'domestic', '国内 IPv4 · 默认路径')}
         ${renderExitTile(v, 'foreign', '国外 IPv4')}
         ${renderExitTile(v, 'domestic6', '国内 IPv6')}
         ${renderExitTile(v, 'foreign6', '国外 IPv6')}
@@ -882,6 +993,7 @@ export function renderOverview(v: View, openFolds: ReadonlySet<string> = new Set
       ${renderRecentChangesCard(v)}
       <div class="overview-folds-stack">
         ${renderProbeLatencyCard(v, openFolds)}
+        ${renderLanEgressCard(v, openFolds)}
         ${renderConnectivitySnapshotCard(v, openFolds)}
       </div>
     </div>
@@ -889,8 +1001,8 @@ export function renderOverview(v: View, openFolds: ReadonlySet<string> = new Set
 }
 
 export function initOverviewPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
-  // Keep `连通性与代理配置快照` open initially so site health chips + proxy summary balance Recent Changes cleanly
-  const openFolds = new Set<string>(['snapshot']);
+  // Keep all 3 right-hand telemetry folds compact by default so 1080×740 stays zero-scroll while showing live summaries
+  const openFolds = new Set<string>();
   let hasRenderedOnce = false;
 
   const syncFoldsFromDom = () => {

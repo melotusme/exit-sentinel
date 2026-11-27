@@ -135,9 +135,10 @@ function groupLabelForProbe(group: string): string {
 }
 
 function renderProbeEndpoints(probes: Probe[] | undefined): string {
+  const core = probes?.filter(p => !p.source_ip);
   const items =
-    probes && probes.length
-      ? probes.map(p => ({
+    core && core.length
+      ? core.map(p => ({
           id: p.id,
           label: p.label,
           group: groupLabelForProbe(p.group),

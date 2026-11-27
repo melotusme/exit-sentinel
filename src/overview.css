@@ -1086,6 +1086,70 @@ main.app-main:has(> #panel-overview:not([hidden])) #pause-banner {
   white-space: nowrap;
 }
 
+.fold-meta.is-warn-meta {
+  color: var(--status-warn-fg);
+  font-weight: 600;
+}
+
+.lan-egress-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lan-egress-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.lan-egress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.05fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lan-egress-row:last-child {
+  border-bottom: 0;
+}
+
+.lan-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lan-col strong {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.lan-col small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.lan-col-end {
+  align-items: flex-end;
+  text-align: end;
+}
+
+@media (max-width: 720px) {
+  .lan-egress-row {
+    grid-template-columns: 1fr;
+  }
+  .lan-col-end {
+    align-items: flex-start;
+    text-align: start;
+  }
+}
+
 .fold-body {
   border-top: 1px solid var(--border-subtle);
 }
