@@ -1,8 +1,10 @@
+// Software Updater UI (`#updater-card-host` in Settings -> 更新与关于 + `#software-update` global banner).
+
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { setUpdateState } from './store';
-import { esc } from './ui';
 import type { UpdatePhase, UpdateStatus } from './types';
+import { copyToClipboard, esc, icon } from './ui';
 
 const LEGACY_AUTO_UPDATE_KEY = 'exit-sentinel.auto-update-check';
 
@@ -64,28 +66,36 @@ function buildCopyableError(errorText: string): string {
   return lines.join('\n');
 }
 
-function phaseSummary(s: UpdateStatus | null): string {
-  if (!s) return loaded ? '状态未知' : '正在读取状态…';
+function phaseSummary(s: UpdateStatus | null): { label: string; pillClass: string } {
+  if (!s) {
+    return { label: loaded ? '状态未知' : '正在读取状态…', pillClass: 'pill' };
+  }
   switch (s.phase) {
     case 'idle':
-      if (s.error) return '上次更新失败';
-      return manualCheckFeedback ? '已是最新版本' : '空闲';
+      if (s.error) return { label: '上次检查异常', pillClass: 'pill warn' };
+      return {
+        label: manualCheckFeedback ? '已是最新版本' : '已是最新 / 自动守护中',
+        pillClass: 'pill ok',
+      };
     case 'checking':
-      return '正在检查更新…';
+      return { label: '正在检查更新…', pillClass: 'pill' };
     case 'available':
-      return `发现新版本 ${formatVersion(s.latestVersion)}`;
+      return { label: `发现新版本 ${formatVersion(s.latestVersion)}`, pillClass: 'pill ok' };
     case 'downloading': {
       const progress = formatProgress(s.received, s.total);
-      return progress ? `正在下载更新 ${progress}` : '正在下载更新…';
+      return {
+        label: progress ? `正在下载 ${progress}` : '正在下载新版本…',
+        pillClass: 'pill',
+      };
     }
     case 'verifying':
-      return '正在校验签名与完整性…';
+      return { label: '正在校验签名与完整性…', pillClass: 'pill' };
     case 'ready_deferred':
-      return `${formatVersion(s.latestVersion)} 已就绪，关闭窗口后更新`;
+      return { label: `${formatVersion(s.latestVersion)} 已就绪，待重启完成`, pillClass: 'pill ok' };
     case 'installing':
-      return '正在安装更新并重启…';
+      return { label: '正在安装并重启…', pillClass: 'pill ok' };
     case 'error':
-      return '更新未完成';
+      return { label: '更新未完成', pillClass: 'pill risk' };
   }
 }
 
@@ -130,94 +140,119 @@ export function updateSettings(): string {
   const busy = isActionDisabled();
   const checking = s?.phase === 'checking';
   const toggleDisabled = !loaded || settingsBusy;
+  const summary = phaseSummary(s);
+  const hasReadyUpdate = s?.phase === 'available' || s?.phase === 'ready_deferred';
 
   const progressText =
     s?.phase === 'downloading'
       ? `正在下载新版本 ${formatVersion(s.latestVersion)}${formatProgress(s.received, s.total) ? ` · ${formatProgress(s.received, s.total)}` : '…'}`
       : s?.phase === 'verifying'
-        ? '下载完成，正在校验签名与完整性…'
+        ? '安装包下载完成，正在校验数字签名与完整性…'
         : s?.phase === 'installing'
-          ? '正在安装更新，完成后将自动重启应用…'
+          ? '正在覆盖安装新版本，完成后将自动重启应用…'
           : '';
 
-  return `<div class="card-header-block compact">
-      <div>
-        <span class="eyebrow">UPDATES</span>
-        <h2>软件更新</h2>
+  return `<div class="update-app-hero">
+      <div class="update-app-identity">
+        <span class="update-app-icon">${icon('shield')}</span>
+        <div class="update-app-text">
+          <div class="update-app-title-row">
+            <h2>版本与自动更新</h2>
+            <span class="version-pill mono tabular">${esc(formatVersion(s?.currentVersion))}</span>
+            <span class="${summary.pillClass} tabular">${esc(summary.label)}</span>
+          </div>
+          <p class="small muted">出口哨兵（Exit Sentinel）· 匿名读取公开 GitHub Release 并强制校验更新签名</p>
+        </div>
       </div>
-      <button type="button" id="check-software-update" ${busy ? 'disabled' : ''}>${checking ? '正在检查…' : '立即检查更新'}</button>
+      <div class="update-hero-actions">
+        ${
+          hasReadyUpdate
+            ? `<button type="button" id="install-software-update-settings" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>
+                ${s?.phase === 'ready_deferred' ? '立即重启完成更新' : '立即下载并重启更新'}
+              </button>`
+            : ''
+        }
+        <button type="button" id="check-software-update" class="${hasReadyUpdate ? '' : 'primary'}" ${busy ? 'disabled' : ''}>
+          ${icon('refresh')}<span>${checking ? '正在检查…' : '检查更新'}</span>
+        </button>
+      </div>
     </div>
+
     <div class="update-meta-grid">
       <div class="update-meta-cell">
         <span class="meta-label">当前版本</span>
-        <span class="meta-val mono">${esc(formatVersion(s?.currentVersion))}</span>
+        <span class="meta-val mono tabular">${esc(formatVersion(s?.currentVersion))}</span>
       </div>
       <div class="update-meta-cell">
-        <span class="meta-label">更新状态</span>
-        <span class="meta-val">${esc(phaseSummary(s))}</span>
+        <span class="meta-label">通道状态</span>
+        <span class="meta-val tabular">${esc(summary.label)}</span>
       </div>
       <div class="update-meta-cell">
-        <span class="meta-label">上次检查</span>
-        <span class="meta-val mono">${esc(formatCheckedAt(s?.lastCheckedAt ?? null))}</span>
+        <span class="meta-label">上次检查时间</span>
+        <span class="meta-val mono tabular">${esc(formatCheckedAt(s?.lastCheckedAt ?? null))}</span>
       </div>
     </div>
+
     ${
       s?.lastUpdatedFrom
         ? `<div class="update-note-box is-success" role="status">
-            <strong>已完成静默更新</strong>
-            <p class="small">已在后台静默从 ${esc(formatVersion(s.lastUpdatedFrom))} 更新至 ${esc(formatVersion(s.currentVersion))}。</p>
+            <div class="update-note-content">
+              <strong>已完成后台更新</strong>
+              <p class="small">已从 <span class="mono tabular">${esc(formatVersion(s.lastUpdatedFrom))}</span> 平滑升级至 <span class="mono tabular">${esc(formatVersion(s.currentVersion))}</span>，本机配置与记录完整保留。</p>
+            </div>
           </div>`
         : ''
     }
+
     ${
       s && (s.phase === 'downloading' || s.phase === 'verifying' || s.phase === 'installing')
         ? `<div class="update-note-box is-progress" role="status" aria-live="polite">
-            <strong>${esc(progressText)}</strong>
-            ${progressBarHtml(s)}
+            <div class="update-note-content is-full">
+              <strong class="tabular">${esc(progressText)}</strong>
+              ${progressBarHtml(s)}
+            </div>
           </div>`
         : ''
     }
+
     ${
       s?.phase === 'ready_deferred'
         ? `<div class="update-note-box is-ready" role="status">
             <div class="update-note-content">
-              <strong>新版本 ${esc(formatVersion(s.latestVersion))} 已下载并校验，关闭窗口后自动更新</strong>
-              <p class="small muted">关闭主窗口到托盘后将自动静默安装并重启；也可以立即重启更新。</p>
-              ${s.notes ? `<p class="update-notes">${esc(s.notes)}</p>` : ''}
-            </div>
-            <div class="form-actions">
-              <button type="button" id="install-software-update-settings" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>立即重启更新</button>
+              <strong>新版本 <span class="mono tabular">${esc(formatVersion(s.latestVersion))}</span> 已下载并校验通过</strong>
+              <p class="small muted">关闭主窗口回到托盘后将自动完成安装；你也可以点击“立即重启完成更新”。</p>
+              ${s.notes ? `<div class="update-notes">${esc(s.notes)}</div>` : ''}
             </div>
           </div>`
         : ''
     }
+
     ${
       s?.phase === 'available'
         ? `<div class="update-note-box is-available" role="status">
             <div class="update-note-content">
-              <strong>发现新版本 ${esc(formatVersion(s.latestVersion))}（当前 ${esc(formatVersion(s.currentVersion))}）</strong>
-              ${s.notes ? `<p class="update-notes">${esc(s.notes)}</p>` : '<p class="small muted">此版本未提供更新说明。</p>'}
-            </div>
-            <div class="form-actions">
-              <button type="button" id="install-software-update-settings" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>安装并重启</button>
+              <strong>发现可用新版本 <span class="mono tabular">${esc(formatVersion(s.latestVersion))}</span>（当前 <span class="mono tabular">${esc(formatVersion(s.currentVersion))}</span>）</strong>
+              ${s.notes ? `<div class="update-notes">${esc(s.notes)}</div>` : '<p class="small muted">该版本未附带详细更新说明。</p>'}
             </div>
           </div>`
         : ''
     }
+
     ${
       s && !s.canSilentInstall && s.autoUpdateCheck && s.autoUpdateInstall
         ? `<div class="warning update-warning" role="status">
-            自动静默安装当前受限：${esc(s.silentBlockedReason || '当前运行环境或安装目录不支持静默写入，发现新版本后需手动确认安装。')}
+            <span><strong>后台静默安装受限</strong>：${esc(s.silentBlockedReason || '当前安装目录需要管理员或交互权限，发现新版本后将提示你手动确认更新。')}</span>
           </div>`
         : ''
     }
+
     ${
       err
         ? `<div class="update-error-box" role="alert">
-            <div class="update-error-head">
-              <strong>${err.isManual ? '软件更新失败' : '后台自动更新失败'}</strong>
+            <div class="update-note-content">
+              <strong>${err.isManual ? '检查或安装更新失败' : '后台自动更新未完成'}</strong>
+              <p class="update-error-text mono">${esc(err.text)}</p>
             </div>
-            <p class="update-error-text mono">${esc(err.text)}</p>
             <div class="form-actions">
               <button type="button" data-update-action="copy-error" data-copy-target="settings">${copyFeedbackTarget === 'settings' ? '已复制' : '复制错误信息'}</button>
               <button type="button" data-update-action="retry" class="primary" ${busy ? 'disabled' : ''}>重试</button>
@@ -225,20 +260,23 @@ export function updateSettings(): string {
           </div>`
         : ''
     }
+
     ${
       !err && manualCheckFeedback && s?.phase === 'idle'
         ? `<p class="small muted status-note" role="status">${esc(manualCheckFeedback)}</p>`
         : ''
     }
-    <label class="toggle">
-      <span>自动检查新版本<small>从公开的 GitHub Release 匿名读取，无需登录；启动后及每 6 小时自动检查，不上传本机出口与节点记录。</small></span>
-      <input name="auto_update_check" type="checkbox" role="switch" ${autoCheck ? 'checked' : ''} ${toggleDisabled ? 'disabled' : ''}>
-    </label>
-    <label class="toggle${!autoCheck ? ' is-disabled' : ''}">
-      <span>发现新版本后自动静默安装并重启<small>在后台下载并校验签名后自动完成更新。若主窗口当前打开，会等待关闭窗口到托盘后再安装，避免打断操作。</small></span>
-      <input name="auto_update_install" type="checkbox" role="switch" ${autoCheck && autoInstall ? 'checked' : ''} ${toggleDisabled || !autoCheck ? 'disabled' : ''}>
-    </label>
-    <p class="small muted status-note">更新偏好保存在本机并立即生效，无需保存监控设置；托盘菜单中的“自动静默更新”会同步此开关。</p>`;
+
+    <div class="update-switches">
+      <label class="toggle">
+        <span>自动检查新版本<small>启动后及每 <span class="tabular">6</span> 小时检查一次新版本，无需登录 GitHub，不上传任何本机配置或网络记录。</small></span>
+        <input name="auto_update_check" type="checkbox" role="switch" data-immediate="true" ${autoCheck ? 'checked' : ''} ${toggleDisabled ? 'disabled' : ''}>
+      </label>
+      <label class="toggle${!autoCheck ? ' is-disabled' : ''}">
+        <span>发现更新后后台自动安装<small>后台下载并校验签名后自动完成覆盖升级；主窗口打开时会等待关闭到托盘后再执行，避免打断当前操作。</small></span>
+        <input name="auto_update_install" type="checkbox" role="switch" data-immediate="true" ${autoCheck && autoInstall ? 'checked' : ''} ${toggleDisabled || !autoCheck ? 'disabled' : ''}>
+      </label>
+    </div>`;
 }
 
 function paintBanner() {
@@ -256,29 +294,26 @@ function paintBanner() {
     if (s?.phase === 'ready_deferred') {
       html = `<section class="notice update-banner is-ready">
         <div class="update-banner-body">
-          <strong>新版本 ${esc(formatVersion(s.latestVersion))} 已下载并校验，关闭窗口后将自动更新</strong>
-          <p class="small muted">关闭主窗口到托盘后将在后台静默安装并重启，也可立即重启更新。</p>
-          ${s.notes ? `<p class="update-notes">${esc(s.notes)}</p>` : ''}
+          <strong>新版本 <span class="mono tabular">${esc(formatVersion(s.latestVersion))}</span> 已下载并校验，关闭窗口后将自动升级</strong>
         </div>
         <div class="form-actions">
           <button type="button" id="install-software-update" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>立即重启更新</button>
-          <button type="button" id="dismiss-software-update">关闭提示</button>
+          <button type="button" id="dismiss-software-update">稍后</button>
         </div>
       </section>`;
     } else if (s?.phase === 'available') {
-      const blockedNote =
+      const blockedSuffix =
         !s.canSilentInstall && s.autoUpdateCheck && s.autoUpdateInstall && s.silentBlockedReason
-          ? `<p class="small muted">静默安装不可用：${esc(s.silentBlockedReason)}</p>`
+          ? ` · ${esc(s.silentBlockedReason)}`
           : '';
       html = `<section class="notice update-banner">
         <div class="update-banner-body">
-          <strong>发现新版本 ${esc(formatVersion(s.latestVersion))}（当前 ${esc(formatVersion(s.currentVersion))}）</strong>
-          ${blockedNote}
-          ${s.notes ? `<p class="update-notes">${esc(s.notes)}</p>` : '<p class="update-notes">此版本未提供更新说明。</p>'}
+          <strong>发现新版本 <span class="mono tabular">${esc(formatVersion(s.latestVersion))}</span>（当前 <span class="mono tabular">${esc(formatVersion(s.currentVersion))}</span>）</strong>
+          ${blockedSuffix ? `<span class="small muted">${blockedSuffix}</span>` : ''}
         </div>
         <div class="form-actions">
-          <button type="button" id="install-software-update" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>安装并重启</button>
-          <button type="button" id="dismiss-software-update">关闭提示</button>
+          <button type="button" id="install-software-update" data-update-action="install" class="primary" ${busy ? 'disabled' : ''}>立即下载并重启更新</button>
+          <button type="button" id="dismiss-software-update">稍后</button>
         </div>
       </section>`;
     } else if (
@@ -290,11 +325,11 @@ function paintBanner() {
         s.phase === 'downloading'
           ? `正在下载更新${formatProgress(s.received, s.total) ? ` ${formatProgress(s.received, s.total)}` : '…'}`
           : s.phase === 'verifying'
-            ? '下载完成，正在验证签名…'
-            : '正在安装更新，完成后将自动重启…';
+            ? '下载完成，正在验证更新包签名…'
+            : '正在安装更新并准备重启…';
       html = `<section class="notice update-banner">
-        <div class="update-banner-body">
-          <strong>${esc(title)}</strong>
+        <div class="update-banner-body is-full">
+          <strong class="tabular">${esc(title)}</strong>
           ${progressBarHtml(s)}
         </div>
       </section>`;
@@ -307,7 +342,7 @@ function paintBanner() {
         <div class="form-actions">
           <button type="button" data-update-action="copy-error" data-copy-target="banner">${copyFeedbackTarget === 'banner' ? '已复制' : '复制错误信息'}</button>
           <button type="button" data-update-action="retry" class="primary" ${busy ? 'disabled' : ''}>重试</button>
-          <button type="button" id="dismiss-software-update">关闭提示</button>
+          <button type="button" id="dismiss-software-update">关闭</button>
         </div>
       </section>`;
     }
@@ -318,12 +353,15 @@ function paintBanner() {
 }
 
 function paintSettingsPanel() {
-  const host = document.querySelector<HTMLElement>('#update-settings');
+  const host =
+    document.querySelector<HTMLElement>('#updater-card-host') ||
+    document.querySelector<HTMLElement>('#update-settings');
   if (!host) return;
 
-  const active = document.activeElement instanceof HTMLElement && host.contains(document.activeElement)
-    ? document.activeElement
-    : null;
+  const active =
+    document.activeElement instanceof HTMLElement && host.contains(document.activeElement)
+      ? document.activeElement
+      : null;
   const focusSelector = active
     ? active.id
       ? `#${CSS.escape(active.id)}`
@@ -392,11 +430,11 @@ async function triggerManualCheck() {
     const result = await invoke<UpdateStatus>('check_update');
     applyStatus(result);
     if (result.phase === 'idle' && !result.error) {
-      manualCheckFeedback = '当前已经是最新版本。';
+      manualCheckFeedback = '当前已是最新版本，无需更新。';
       paintAll();
       const settingsPanel = document.querySelector<HTMLElement>('#update-settings');
       if (!settingsPanel || settingsPanel.hidden) {
-        notify?.('当前已经是最新版本。');
+        notify?.('当前已是最新版本');
       }
     }
   } catch (e) {
@@ -421,7 +459,6 @@ async function triggerInstall() {
   paintAll();
   try {
     await invoke('install_update');
-    // Rust handles restart on all platforms; keep state refreshed in case the process stays alive briefly.
   } catch (e) {
     manualInstallInFlight = false;
     const msg = String(e);
@@ -461,28 +498,7 @@ async function updatePreferences(autoUpdateCheck: boolean, autoUpdateInstall: bo
 async function copyError(target: 'settings' | 'banner') {
   const err = effectiveError();
   if (!err) return;
-  const payload = buildCopyableError(err.text);
-  let ok = false;
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(payload);
-      ok = true;
-    }
-  } catch {}
-  if (!ok) {
-    try {
-      const area = document.createElement('textarea');
-      area.value = payload;
-      area.setAttribute('readonly', '');
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      area.style.pointerEvents = 'none';
-      document.body.appendChild(area);
-      area.select();
-      ok = document.execCommand('copy');
-      area.remove();
-    } catch {}
-  }
+  const ok = await copyToClipboard(buildCopyableError(err.text));
   if (ok) {
     copyFeedbackTarget = target;
     clearTimeout(copyTimer);
@@ -542,7 +558,7 @@ function bindEvents() {
       void updatePreferences(
         true,
         nextInstall,
-        nextInstall ? '已开启自动静默更新' : '已关闭自动静默安装，发现新版本后将提醒确认'
+        nextInstall ? '已开启后台自动安装更新' : '已关闭后台自动安装，发现新版本后将提醒你确认'
       );
     }
   });
@@ -566,7 +582,7 @@ async function migrateLegacyPreference() {
         localStorage.removeItem(LEGACY_AUTO_UPDATE_KEY);
       } catch {}
     } catch {
-      // Keep the legacy key so migration can retry on next launch if backend was unavailable.
+      // Retry migration next launch if backend is temporarily unavailable.
     }
   } else if (legacy !== null) {
     try {

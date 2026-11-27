@@ -1,496 +1,1135 @@
-// Settings page: monitoring preferences, autostart, notification permission, sync and usage notes.
+// 4-Section Settings Workspace:
+// 1. `monitor-settings` (常规与监控)
+// 2. `routing-settings` (代理与分流)
+// 3. `webdav-settings`  (云同步)
+// 4. `update-settings`  (更新与关于)
+
 import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { confirmAction } from './confirm';
 import { renderGuide } from './guide';
-import { discardUnsavedSync, hasUnsavedSync, loadSync, syncInProgress, syncSettings } from './sync';
-import { getUpdatePreferences, refreshUpdateStatus, updateSettings } from './updater';
-import { esc } from './ui';
-import { ListView } from './list';
-import { refreshSearchSelects } from './select';
 import type { AppShellApi } from './store';
-import type { PanelHandle, Settings } from './types';
+import { discardUnsavedSync, hasUnsavedSync, loadSync, syncInProgress, syncSettings } from './sync';
+import type { PanelHandle, Probe, Settings, SettingsSubTab } from './types';
+import { esc, icon } from './ui';
+import { getUpdatePreferences, refreshUpdateStatus, updateSettings } from './updater';
 
-export interface SettingsDeps {
-  content: HTMLElement;
-  toast: (message: string, persistent?: boolean) => void;
-  call: <T>(name: string, args?: Record<string, unknown>) => Promise<T>;
-  settings: () => Settings;
-  historyCount: () => number;
-  /** The settings page is the one on screen. */
-  isActive: () => boolean;
+interface IgnorableItem {
+  id: string;
+  title: string;
+  host: string;
 }
-let deps: SettingsDeps;
-/** Checks the user can ignore; must match IGNORABLE_CHECKS in src-tauri/src/model.rs. */
-const IGNORABLE: [string, string][] = [
-  ['site:google', 'Google 网站访问'],
-  ['site:claude', 'Claude 网站访问'],
-  ['site:gemini', 'Gemini 网站访问'],
-  ['site:antigravity', 'Antigravity 网站访问'],
-  ['probe:cn-ipip', '国内 · IPIP'],
-  ['probe:cn-3322', '国内 · 3322'],
-  ['probe:global-cf', '国外 · Cloudflare'],
-  ['probe:global-ipify', '国外 · ipify'],
-  ['probe:cn-v6', '国内 · IPv6'],
-  ['probe:global-v6', '国外 · IPv6'],
+
+const SITE_CHECKS: IgnorableItem[] = [
+  { id: 'site:google', title: 'Google', host: 'www.google.com' },
+  { id: 'site:claude', title: 'Claude', host: 'claude.ai' },
+  { id: 'site:gemini', title: 'Gemini', host: 'gemini.google.com' },
+  { id: 'site:antigravity', title: 'Antigravity', host: 'antigravity.google' },
 ];
-interface IgnorableCheck { id: string; name: string; kind: string }
-const kindOf = (id: string) => id.startsWith('site:') ? 'site' : id.startsWith('probe:cn-') ? 'domestic' : 'foreign';
-const KINDS: Record<string, string> = { site: '网站访问', domestic: '国内出口', foreign: '国外出口' };
-const CHECKS: IgnorableCheck[] = IGNORABLE.map(([id, name]) => ({ id, name, kind: kindOf(id) }));
-/** Ticked items not yet saved. Kept outside the DOM so paging and filtering keep them. */
-let ignoredDraft = new Set<string>();
-export const ignoreList = new ListView<IgnorableCheck>(
-  'ignored-checks',
-  {
-    name: { label: '检测项', value: r => r.name },
-    kind: { label: '类别', value: r => KINDS[r.kind] },
-    state: { label: '状态', value: r => (ignoredDraft.has(r.id) ? '1' : '0') },
-  },
-  r => `${r.name} ${KINDS[r.kind]} ${ignoredDraft.has(r.id) ? '已忽略' : '计入状态'}`,
-  r => r.kind,
-  KINDS
-);
-const ignoreRow = (r: IgnorableCheck) => {
-  const on = ignoredDraft.has(r.id);
-  return `<label class="ignore-row ${on ? 'is-ignored' : ''}">
-    <input type="checkbox" name="ignored_checks" value="${esc(r.id)}" ${on ? 'checked' : ''}>
-    <span class="ignore-name">${esc(r.name)}</span>
-    <span class="ignore-kind">${esc(KINDS[r.kind])}</span>
-    <span class="ignore-state">${on ? '已忽略' : '计入状态'}</span>
-  </label>`;
-};
-export const renderIgnoreList = () => ignoreList.render(CHECKS, ignoreRow);
-const ignoredChecks = (s: Settings) => {
-  ignoredDraft = new Set(s.ignored_checks || []);
-  return `
-  <div id="ignored-checks" tabindex="-1" class="field field-full ignore-field">
-    <span>忽略的检测项</span>
-    <small>勾选的项目照常检测和显示，但不再让菜单栏变成“部分检测异常”。只保存在本机。</small>
-    <div class="ignore-list panel">${renderIgnoreList()}</div>
-  </div>`;
-};
-let auto: boolean | null = null,
-  autoBusy = false,
-  settingsSaving = false;
-export function initSettings(d: SettingsDeps) {
-  deps = d;
-  const header = document.querySelector('.app-header');
-  if (header) new ResizeObserver(() => {
-    const nav = deps.content.querySelector<HTMLElement>('.settings-links');
-    if (nav) nav.style.top = `${header.getBoundingClientRect().height}px`;
-  }).observe(header);
-}
-export const settingsBusy = () => settingsSaving;
-export function setAutostart(value: boolean | null) {
-  auto = value;
-  paintAutostart();
-}
 
-const SECTIONS = [
-  ['monitor-settings', '监控与通知'], ['routing-settings', '代理路径'],
-  ['permissions-settings', '权限'], ['system-settings', '系统启动'],
-  ['webdav-settings', '配置同步'], ['update-settings', '软件更新'], ['help-settings', '使用说明'],
-] as const;
-let section = 'monitor-settings';
-try { const saved = localStorage.getItem('sentinel.settings.section'); if (SECTIONS.some(([id]) => id === saved)) section = saved!; } catch {}
+const PROBE_CHECKS: IgnorableItem[] = [
+  { id: 'probe:cn-ipip', title: '国内 · IPIP', host: 'myip.ipip.net' },
+  { id: 'probe:cn-3322', title: '国内 · 3322', host: 'ip.3322.net' },
+  { id: 'probe:global-cf', title: '国外 · Cloudflare', host: 'cloudflare.com/cdn-cgi/trace' },
+  { id: 'probe:global-ipify', title: '国外 · ipify', host: 'api.ipify.org' },
+  { id: 'probe:cn-v6', title: '国内 · IPv6', host: '6.ipw.cn' },
+  { id: 'probe:global-v6', title: '国外 · IPv6', host: 'api6.ipify.org' },
+];
 
-export function selectSettingsSection(id: string, focus = false) {
-  if (!SECTIONS.some(([key]) => key === id)) return;
-  section = id;
-  try { localStorage.setItem('sentinel.settings.section', id); } catch {}
-  const root = deps.content;
-  root.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach(button => {
-    const active = button.dataset.settingsTab === id;
-    button.setAttribute('aria-selected', String(active));
-    button.tabIndex = active ? 0 : -1;
-    button.classList.toggle('active', active);
-    if (active && focus) button.focus({ preventScroll: true });
-  });
-  for (const [key] of SECTIONS) {
-    const panel = root.querySelector<HTMLElement>(`#${key}`);
-    if (panel) {
-      panel.hidden = key !== id;
-      panel.setAttribute('role', 'tabpanel');
-      panel.setAttribute('aria-labelledby', `tab-${key}`);
-    }
+const ALL_IGNORABLE_IDS: string[] = [...SITE_CHECKS, ...PROBE_CHECKS].map(item => item.id);
+
+const DEFAULT_PROBES: Array<{ id: string; label: string; group: string; url: string }> = [
+  { id: 'cn-ipip', label: '国内 · IPIP', group: '国内 IPv4', url: 'https://myip.ipip.net' },
+  { id: 'cn-3322', label: '国内 · 3322', group: '国内 IPv4', url: 'https://ip.3322.net' },
+  { id: 'global-cf', label: '国外 · Cloudflare', group: '国外 IPv4', url: 'https://www.cloudflare.com/cdn-cgi/trace' },
+  { id: 'global-ipify', label: '国外 · ipify', group: '国外 IPv4', url: 'https://api.ipify.org?format=json' },
+  { id: 'cn-v6', label: '国内 · IPv6', group: '国内 IPv6', url: 'https://6.ipw.cn' },
+  { id: 'global-v6', label: '国外 · IPv6', group: '国外 IPv6', url: 'https://api6.ipify.org?format=json' },
+];
+
+const FOREIGN_PROXY_PRESETS: Array<{ label: string; value: string }> = [
+  { label: '跟随系统 / TUN', value: '' },
+  { label: 'Clash 127.0.0.1:7890', value: 'http://127.0.0.1:7890' },
+  { label: 'Shadowrocket 127.0.0.1:1082', value: 'socks5h://127.0.0.1:1082' },
+  { label: 'v2rayN 127.0.0.1:10808', value: 'socks5h://127.0.0.1:10808' },
+  { label: '直连不使用代理', value: 'direct' },
+];
+
+const DOMESTIC_PROXY_PRESETS: Array<{ label: string; value: string }> = [
+  { label: '跟随系统 / TUN', value: '' },
+  { label: '直连不使用代理', value: 'direct' },
+  { label: 'Clash 127.0.0.1:7890', value: 'http://127.0.0.1:7890' },
+  { label: 'Shadowrocket 127.0.0.1:1082', value: 'socks5h://127.0.0.1:1082' },
+  { label: 'v2rayN 127.0.0.1:10808', value: 'socks5h://127.0.0.1:10808' },
+];
+
+const INTERVAL_PRESETS = [15, 30, 60, 120] as const;
+
+const VALID_SUBTABS: SettingsSubTab[] = [
+  'monitor-settings',
+  'routing-settings',
+  'webdav-settings',
+  'update-settings',
+];
+
+function normalizeSubTab(sub: string): SettingsSubTab {
+  if (VALID_SUBTABS.includes(sub as SettingsSubTab)) {
+    return sub as SettingsSubTab;
   }
-  const form = root.querySelector<HTMLFormElement>('#settings-form');
-  if (form) form.hidden = !['monitor-settings', 'routing-settings'].includes(id);
-  const nav = root.querySelector<HTMLElement>('.settings-links');
-  if (nav) nav.style.top = `${document.querySelector('.app-header')?.getBoundingClientRect().height || 80}px`;
-  if (id === 'permissions-settings') void refreshPermissions();
-  if (id === 'update-settings') void refreshUpdateStatus();
+  return 'monitor-settings';
 }
 
-export async function refreshPermissions() {
-  const wifi = deps.content.querySelector('#wifi-permission-status');
-  const notification = deps.content.querySelector('#notification-permission-status');
-  if (!wifi || !notification) return;
-  const messages: Record<string, string> = {
-    granted: '已允许。若名称仍未显示，可刷新网络状态；这不代表权限被拒绝。',
-    not_determined: '尚未申请。点击“申请 Wi-Fi 名称权限”后，在系统弹窗中允许。',
-    denied: '已拒绝。系统不会重复弹窗，请在系统定位设置中允许 Exit Sentinel。',
-    restricted: '受系统策略限制，请检查屏幕使用时间或设备管理策略。',
-    services_off: '系统定位服务已关闭。请先打开总开关，再允许 Exit Sentinel。',
-    settings: '请在 Windows 定位设置中检查定位服务和桌面应用访问权限。',
-    not_required: '此系统无需申请定位权限；Wi-Fi 名称由系统网络服务提供。',
+function comparableSettings(s: Settings) {
+  return {
+    manual_nodes_only: Boolean(s.manual_nodes_only),
+    interval: Number(s.interval),
+    claude_proxy: (s.claude_proxy || '').trim(),
+    gemini_proxy: (s.gemini_proxy || '').trim(),
+    gemini_ip_url: (s.gemini_ip_url || '').trim(),
+    notifications: Boolean(s.notifications),
+    retain_history: Boolean(s.retain_history),
+    ipv6: Boolean(s.ipv6),
+    ipv6_required: Boolean(s.ipv6_required),
+    domestic_proxy: (s.domestic_proxy || '').trim(),
+    foreign_proxy: (s.foreign_proxy || '').trim(),
+    ignored_checks: ALL_IGNORABLE_IDS.filter(id => (s.ignored_checks || []).includes(id)),
   };
-  await Promise.all([
-    invoke<string>('wifi_permission_status').then(status => {
-      wifi.textContent = messages[status] || status;
-      deps.content.querySelectorAll<HTMLButtonElement>('#wifi-name-permission,#location-settings').forEach(button => { button.disabled = status === 'not_required'; });
-    })
-      .catch(error => { wifi.textContent = `读取失败：${String(error)}`; }),
-    isPermissionGranted().then(ok => { notification.textContent = ok ? '已允许（仍受勿扰模式和系统通知设置影响）。' : '尚未允许。点击“申请通知权限”；若曾拒绝，请到系统通知设置中开启。'; })
-      .catch(error => { notification.textContent = `读取失败：${String(error)}`; }),
-  ]);
 }
-window.setInterval(() => { if (deps?.isActive() && section === 'permissions-settings' && !document.hidden) void refreshPermissions(); }, 3000);
-window.addEventListener('focus', () => { if (deps?.isActive() && section === 'permissions-settings') void refreshPermissions(); });
-document.addEventListener('click', async event => {
-  const target = (event.target as HTMLElement).closest<HTMLElement>('[data-settings-tab],#refresh-permissions,#request-notifications');
-  if (!target || !deps?.isActive()) return;
-  if (target.dataset.settingsTab) { selectSettingsSection(target.dataset.settingsTab, true); window.scrollTo({ top: 0 }); }
-  else if (target.id === 'refresh-permissions') await refreshPermissions();
-  else {
-    try { await permission(); await refreshPermissions(); }
-    catch (error) { deps.toast(String(error), true); }
-  }
-});
-document.addEventListener('keydown', event => {
-  const button = (event.target as HTMLElement).closest<HTMLElement>('[data-settings-tab]');
-  if (!button || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault();
-  const index = SECTIONS.findIndex(([id]) => id === button.dataset.settingsTab);
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? SECTIONS.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length;
-  selectSettingsSection(SECTIONS[next][0], true);
-});
 
-export function renderSettings(s: Settings) {
-  deps.content.innerHTML = `
-    <div class="settings-stack">
-      <nav class="settings-links" role="tablist" aria-label="设置分区">${SECTIONS.map(([id, name]) => `<button type="button" role="tab" id="tab-${id}" aria-controls="${id}" data-settings-tab="${id}">${name}</button>`).join('')}</nav>
-      <form id="settings-form" class="settings-form">
-      <section id="monitor-settings" class="panel settings settings-card">
-        <div class="card-header-block">
-          <div>
-            <span class="eyebrow">MONITORING & ALERTS</span>
-            <h2>检测策略与系统提醒</h2>
+function renderCheckItem(item: IgnorableItem, ignored: Set<string>): string {
+  const checked = ignored.has(item.id);
+  return `<label class="ignore-check-card${checked ? ' is-ignored' : ''}">
+    <input type="checkbox" name="ignored_checks" value="${esc(item.id)}" ${checked ? 'checked' : ''}>
+    <span class="ignore-check-main">
+      <span class="ignore-check-title">${esc(item.title)}</span>
+      <span class="ignore-check-host mono">${esc(item.host)}</span>
+    </span>
+    <span class="ignore-check-badge">${checked ? '已忽略' : '计入'}</span>
+  </label>`;
+}
+
+function renderPresetChips(
+  targetField: 'foreign_proxy' | 'domestic_proxy',
+  currentValue: string,
+  presets: Array<{ label: string; value: string }>
+): string {
+  const trimmed = currentValue.trim();
+  return `<div class="preset-chips" role="group" aria-label="${targetField === 'foreign_proxy' ? '国外代理常用预设' : '国内代理常用预设'}">
+    ${presets
+      .map(preset => {
+        const active = trimmed === preset.value;
+        return `<button type="button" class="preset-chip${active ? ' is-active' : ''}" data-proxy-target="${targetField}" data-proxy-preset="${esc(preset.value)}" aria-pressed="${active}">
+          ${esc(preset.label)}
+        </button>`;
+      })
+      .join('')}
+  </div>`;
+}
+
+function groupLabelForProbe(group: string): string {
+  if (group === 'domestic') return '国内 IPv4';
+  if (group === 'foreign') return '国外 IPv4';
+  if (group === 'domestic6') return '国内 IPv6';
+  if (group === 'foreign6') return '国外 IPv6';
+  return group;
+}
+
+function renderProbeEndpoints(probes: Probe[] | undefined): string {
+  const items =
+    probes && probes.length
+      ? probes.map(p => ({
+          id: p.id,
+          label: p.label,
+          group: groupLabelForProbe(p.group),
+          url: p.url,
+        }))
+      : DEFAULT_PROBES;
+
+  return `<div class="probe-endpoints-grid">
+    ${items
+      .map(
+        item => `<div class="probe-endpoint-item">
+          <div class="probe-endpoint-head">
+            <strong>${esc(item.label)}</strong>
+            <span class="pill">${esc(item.group)}</span>
           </div>
-        </div>
-        <label class="field">
-          <span>出口检测间隔（秒）</span>
-          <input name="interval" type="number" min="10" max="3600" value="${s.interval}" required>
-          <small>默认 30 秒。出口 IP 与 Google / Claude / Gemini 连通性均自动检测，变化、失败、恢复连续两次确认；本机网络变化约 6 秒确认。</small>
-        </label>
-        <label class="toggle">
-          <span>网络与服务异常时发送系统通知<small>通知出口 IP 变化、Google / Claude / Gemini 连接失败或访问受限及恢复；持续故障不重复提醒，菜单栏同时显示异常。</small></span>
-          <input name="notifications" type="checkbox" ${s.notifications ? 'checked' : ''}>
-        </label>
-        <label class="toggle">
-          <span>保存变化记录<small>只保留最近 200 条；关闭后清除已保存的记录。</small></span>
-          <input name="retain_history" type="checkbox" ${s.retain_history ? 'checked' : ''}>
-        </label>
-        <label class="toggle">
-          <span>要求 IPv6 出口可用<small>始终检测国内与国外 IPv6；开启后检测失败影响整体状态。本设置仅保存在本机。</small></span>
-          <input name="ipv6_required" type="checkbox" ${s.ipv6_required ? 'checked' : ''}>
-        </label>
-        ${ignoredChecks(s)}
-      </section>
-      <section id="routing-settings" class="panel settings settings-card">
-        <div class="card-header-block compact">
-          <div>
-            <span class="eyebrow">ROUTING & PROXIES</span>
-            <h2>分流代理路径</h2>
+          <div class="probe-endpoint-url-row">
+            <code class="mono">${esc(item.url)}</code>
+            <button type="button" class="ghost-btn compact" data-copy-text="${esc(item.url)}">复制</button>
           </div>
-        </div>
-        <p class="muted">留空：遵循本机路由 / TUN 和进程代理变量。不会自动读取系统代理或执行 PAC。direct：仅忽略进程代理变量，仍遵循 TUN。</p>
-        <div class="settings-grid">
-          <label class="field">
-            <span>国内检测代理</span>
-            <input autocomplete="off" spellcheck="false" name="domestic_proxy" value="${esc(s.domestic_proxy)}" placeholder="留空，或 direct，或 http://127.0.0.1:端口">
-            <small>只影响国内两个检测站。</small>
-          </label>
-          <label class="field">
-            <span>国外检测与详情查询代理</span>
-            <input autocomplete="off" spellcheck="false" name="foreign_proxy" value="${esc(s.foreign_proxy)}" placeholder="留空，或 socks5h://127.0.0.1:端口">
-            <small>推荐使用代理客户端的本地无认证端口；不保存代理密码。</small>
-          </label>
-        </div>
-        <div class="settings-divider"></div>
-        <div class="card-header-block compact">
-          <div>
-            <span class="eyebrow">AI SERVICE ROUTES</span>
-            <h2>AI 服务独立路径</h2>
-          </div>
-        </div>
-        <p class="muted">默认留空，各自域名沿现有 TUN 分流；不会继承“国外检测代理”。不修改代理客户端规则。</p>
-        <label class="field"><span>节点数据来源</span><select name="manual_nodes_only"><option value="false" ${!s.manual_nodes_only ? 'selected' : ''}>自动读取本机（macOS：Shadowrocket；Windows / Linux：Clash Verge）</option><option value="true" ${s.manual_nodes_only ? 'selected' : ''}>仅手动导入（Shadowrocket / Clash Verge / Karing / Clash Mi 等）</option></select><small>macOS 优先读取近期同域名实际连接日志；没有日志时仅提供配置候选，不能证明某个进程的路径。手动导入节点可在节点库登记，不自动关联 IP。</small></label>
-        <div class="settings-grid">
-          <label class="field">
-            <span>Claude 检测代理</span>
-            <input autocomplete="off" spellcheck="false" name="claude_proxy" value="${esc(s.claude_proxy)}" placeholder="留空，或独立本地代理 URL">
-          </label>
-          <label class="field">
-            <span>Gemini 检测代理</span>
-            <input autocomplete="off" spellcheck="false" name="gemini_proxy" value="${esc(s.gemini_proxy)}" placeholder="留空，或独立本地代理 URL">
-          </label>
-          <label class="field field-full">
-            <span>Gemini 参考出口检测 URL（可选）</span>
-            <input autocomplete="off" spellcheck="false" name="gemini_ip_url" type="url" value="${esc(s.gemini_ip_url)}" placeholder="https://…">
-            <small>留空时用 Google STUN 服务器回显 Gemini 出口（UDP，走 google.com 分流）。只有 UDP 不经代理时才需要填写：必须回显公网 IP，并且和 Gemini 命中同一策略 / 节点。Google 判定的地区始终从 Gemini 页面读取。</small>
-          </label>
-        </div>
-      </section>
-        <div class="form-actions settings-save-actions">
-          <button class="primary" type="submit">保存设置</button>
-
-        </div>
-        <p id="permission" class="small muted status-note"></p>
-      </form>
-      <div id="settings-draft-bar" class="settings-draft-bar" hidden>
-        <span role="status">监控与代理设置有未保存修改</span>
-        <button type="button" id="restore-settings">还原修改</button>
-        <button type="submit" form="settings-form" class="primary">保存监控与代理设置</button>
-      </div>
-      <section id="permissions-settings" class="panel settings settings-card">
-        <h2>权限</h2>
-        <p class="muted">权限由操作系统管理。返回应用时自动刷新授权状态。</p>
-        <h3>Wi-Fi 名称 · 定位权限</h3>
-        <p>macOS 需要定位权限才能读取 Wi-Fi 名称。应用只读取网络名称，不请求位置坐标，也不保存位置。未授权不影响出口 IP 检测。</p>
-        <p id="wifi-permission-status" role="status">正在读取授权状态…</p>
-        <div class="form-actions"><button type="button" class="primary" id="wifi-name-permission">申请 Wi-Fi 名称权限</button><button type="button" id="location-settings">打开系统定位设置</button></div>
-        <p class="small muted">若升级后再次提示，请重新检查授权。本应用当前使用临时签名，macOS 可能将新版视为不同代码；稳定保留授权需要正式开发者签名。</p>
-        <div class="settings-divider"></div>
-        <h3>系统通知</h3>
-        <p id="notification-permission-status" role="status">正在读取授权状态…</p>
-        <div class="form-actions"><button type="button" id="request-notifications">申请通知权限</button><button type="button" id="test-notification">发送测试通知</button></div>
-        <div class="settings-divider"></div>
-        <button type="button" id="refresh-permissions">刷新权限状态</button>
-      </section>
-      <section id="system-settings" class="panel settings settings-card">
-        <h2>系统启动</h2>
-        <label class="toggle">
-          <span>开机自启<small id="autostart-status">${auto === null ? '正在读取系统状态…' : '登录这台电脑后在托盘后台运行。切换立即生效，无需保存。'}</small></span>
-          <input name="autostart" type="checkbox" role="switch" ${auto ? 'checked' : ''} ${auto === null || autoBusy ? 'disabled' : ''}>
-        </label>
-      </section>
-      ${syncSettings()}
-      <section id="update-settings" class="panel settings settings-card">${updateSettings()}</section>
-      <section id="help-settings">${renderGuide()}</section>
-    </div>`;
-  selectSettingsSection(section);
-  void loadSync();
-  isPermissionGranted()
-    .then(ok => {
-      const e = document.querySelector('#permission');
-      if (e)
-        e.textContent = ok
-          ? '通知授权：已允许（仍受勿扰模式和系统通知设置影响）'
-          : '通知授权：尚未允许；保存并启用通知或发送测试通知时会请求授权。';
-    })
-    .catch(() => {});
+        </div>`
+      )
+      .join('')}
+  </div>`;
 }
 
-export function paintSettingsDraft() {
-  const form = deps.content.querySelector<HTMLFormElement>('#settings-form');
-  const bar = deps.content.querySelector<HTMLElement>('#settings-draft-bar');
-  if (bar) bar.hidden = form?.dataset.dirty !== 'true';
-}
+export function initSettingsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
+  let mounted = false;
+  let activeSection: SettingsSubTab = 'monitor-settings';
+  let autostart: boolean | null = null;
+  let autostartBusy = false;
+  let settingsSaving = false;
+  let ignoredDraft = new Set<string>();
+  let ipv6RequiredDraft = false;
+  let lastSyncedSignature = '';
 
-document.addEventListener('click', event => {
-  if (!(event.target as HTMLElement).closest('#restore-settings') || settingsSaving) return;
-  const form = deps.content.querySelector<HTMLFormElement>('#settings-form');
-  if (!form) return;
-  const s = deps.settings();
-  for (const field of form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select')) {
-    if (!(field.name in s)) continue;
-    const value = s[field.name as keyof Settings];
-    if (field instanceof HTMLInputElement && field.type === 'checkbox') field.checked = value === true;
-    else field.value = String(value);
-  }
-  ignoredDraft = new Set(s.ignored_checks || []);
-  form.querySelector('.ignore-list')!.innerHTML = renderIgnoreList();
-  refreshSearchSelects(form);
-  form.dataset.dirty = 'false';
-  paintSettingsDraft();
-  deps.toast('已还原监控与代理设置；系统启动、同步和更新偏好保持各自状态。');
-  form.querySelector<HTMLInputElement>('[name=interval]')?.focus();
-});
+  const showToast = (msg: string, persistent = false, tone: 'neutral' | 'safe' | 'warn' | 'risk' = 'neutral') => {
+    app.showToast(msg, { persistent, tone: persistent ? 'risk' : tone });
+  };
 
-export async function permission() {
-  let ok = await isPermissionGranted();
-  if (!ok) ok = (await requestPermission()) === 'granted';
-  if (!ok) deps.toast('通知尚未获允许，请在系统设置 → 通知 → Exit Sentinel 中启用。');
-  return ok;
-}
-
-export function paintAutostart(message?: string) {
-  const input = deps.content.querySelector<HTMLInputElement>('[name=autostart]');
-  if (input) {
-    input.checked = auto === true;
-    input.disabled = auto === null || autoBusy;
-    input.setAttribute('aria-busy', String(autoBusy));
-  }
-  const status = deps.content.querySelector('#autostart-status');
-  if (status)
-    status.textContent =
-      message ||
-      (autoBusy
-        ? '正在更新系统设置…'
-        : auto === null
-          ? '无法读取系统状态，请重新进入设置页重试。'
-          : '登录这台电脑后在托盘后台运行。切换立即生效，无需保存。');
-}
-
-export async function syncAutostart() {
-  if (autoBusy) return;
-  try {
-    auto = await invoke<boolean>('get_autostart');
-    paintAutostart();
-  } catch (e) {
-    auto = null;
-    paintAutostart();
-    deps.toast(`开机自启状态读取失败：${e}`);
-  }
-}
-
-document.addEventListener('change', event => {
-  const input = event.target as HTMLInputElement;
-  if (input.name !== 'ignored_checks') return;
-  if (input.checked) ignoredDraft.add(input.value);
-  else ignoredDraft.delete(input.value);
-  const row = input.closest('.ignore-row');
-  row?.classList.toggle('is-ignored', input.checked);
-  const state = row?.querySelector('.ignore-state');
-  if (state) state.textContent = input.checked ? '已忽略' : '计入状态';
-});
-
-// Enter in the list's keyword box filters; it must not submit the settings form.
-document.addEventListener('keydown', event => {
-  const input = event.target as HTMLElement;
-  if (event.key === 'Enter' && input.matches('#settings-form [data-list-action]')) event.preventDefault();
-});
-
-document.addEventListener('change', async event => {
-  const input = event.target as HTMLInputElement;
-  if (input.name !== 'autostart' || autoBusy) return;
-  const wanted = input.checked;
-  autoBusy = true;
-  paintAutostart();
-  try {
-    auto = await invoke<boolean>('set_autostart', { enabled: wanted });
-    deps.toast(auto ? '已开启开机自启' : '已关闭开机自启');
-  } catch (e) {
+  async function ensureNotificationPermission(): Promise<boolean> {
     try {
-      auto = await invoke<boolean>('get_autostart');
-    } catch {
-      auto = null;
+      let ok = await isPermissionGranted();
+      if (!ok) {
+        ok = (await requestPermission()) === 'granted';
+      }
+      if (!ok) {
+        showToast('系统尚未授予通知权限，请在操作系统通知设置中允许 Exit Sentinel。', false, 'warn');
+      }
+      return ok;
+    } catch (e) {
+      showToast(`检查通知权限失败：${String(e)}`, true, 'risk');
+      return false;
     }
-    deps.toast(`开机自启设置失败：${e}`, true);
-  } finally {
-    autoBusy = false;
-    paintAutostart();
   }
-});
 
-window.setInterval(() => { if (deps?.isActive() && section === 'permissions-settings' && !document.hidden) void refreshPermissions(); }, 3000);
-window.addEventListener('focus', () => {
-  if (deps.isActive()) void syncAutostart();
-});
-
-document.addEventListener('submit', async event => {
-  if ((event.target as HTMLElement).id !== 'settings-form') return;
-  event.preventDefault();
-  if (settingsSaving) return;
-  settingsSaving = true;
-  const form = event.target as HTMLFormElement;
-  const f = new FormData(form);
-  const submit = form.querySelector<HTMLButtonElement>('[type=submit]')!;
-  const controls = Array.from(deps.content.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#settings-form input, #settings-form select, #settings-form button, #settings-draft-bar button'));
-  const disabled = controls.map(control => control.disabled);
-  controls.forEach(control => { control.disabled = true; });
-  submit.disabled = true;
-  try {
-    const current = deps.settings();
+  function readFormSettings(): Settings | null {
+    const form = panel.querySelector<HTMLFormElement>('#settings-form');
+    const base = app.getState()?.settings;
+    if (!form || !base) return null;
+    const f = new FormData(form);
     const updatePrefs = getUpdatePreferences();
-    const s: Settings = {
+    const rawInterval = Number(f.get('interval'));
+
+    return {
       manual_nodes_only: f.get('manual_nodes_only') === 'true',
       claude_proxy: String(f.get('claude_proxy') || '').trim(),
       gemini_proxy: String(f.get('gemini_proxy') || '').trim(),
       gemini_ip_url: String(f.get('gemini_ip_url') || '').trim(),
-      interval: Number(f.get('interval')),
+      interval: Number.isFinite(rawInterval) ? rawInterval : base.interval,
       notifications: f.has('notifications'),
       retain_history: f.has('retain_history'),
-      ipv6: current.ipv6,
-      ipv6_required: f.has('ipv6_required'),
+      ipv6: base.ipv6,
+      ipv6_required: ipv6RequiredDraft,
       domestic_proxy: String(f.get('domestic_proxy') || '').trim(),
       foreign_proxy: String(f.get('foreign_proxy') || '').trim(),
-      ignored_checks: IGNORABLE.map(([id]) => id).filter(id => ignoredDraft.has(id)),
-      auto_update_check: updatePrefs?.auto_update_check ?? current.auto_update_check ?? true,
-      auto_update_install: updatePrefs?.auto_update_install ?? current.auto_update_install ?? true,
+      ignored_checks: ALL_IGNORABLE_IDS.filter(id => ignoredDraft.has(id)),
+      auto_update_check: updatePrefs?.auto_update_check ?? base.auto_update_check ?? true,
+      auto_update_install: updatePrefs?.auto_update_install ?? base.auto_update_install ?? true,
     };
-    if (!s.retain_history && deps.settings().retain_history && deps.historyCount() &&
-        !await confirmAction({ title: '停止保存并清空变化记录？', message: `已有的 ${deps.historyCount()} 条变化记录将删除，之后不再保存新记录。`, confirm: '清空并保存设置', danger: true })) return;
-    if (s.notifications) await permission();
-    await deps.call('save_settings', { settings: s });
-    form.dataset.dirty = 'false';
-    paintSettingsDraft();
-    deps.toast('设置已保存');
-  } catch (e) {
-    deps.toast(String(e), true);
-  } finally {
-    settingsSaving = false;
-    controls.forEach((control, index) => { control.disabled = disabled[index]; });
   }
-});
 
-export function initSettingsPanel(panel: HTMLElement, app: AppShellApi): PanelHandle {
-  let mounted = false;
+  function isSettingsDirty(): boolean {
+    const saved = app.getState()?.settings;
+    const draft = readFormSettings();
+    if (!saved || !draft) return false;
+    return JSON.stringify(comparableSettings(saved)) !== JSON.stringify(comparableSettings(draft));
+  }
 
-  initSettings({
-    content: panel,
-    toast: (msg, persistent) => app.showToast(msg, { persistent, tone: persistent ? 'risk' : 'neutral' }),
-    call: (name, args) => app.call(name, args),
-    settings: () => app.getState()!.settings,
-    historyCount: () => app.getState()?.history.length || 0,
-    isActive: () => app.getRoute().tab === 'settings',
-  });
+  function paintDraftState() {
+    const dirty = isSettingsDirty();
+    const form = panel.querySelector<HTMLFormElement>('#settings-form');
+    if (form) form.dataset.dirty = String(dirty);
+
+    const bar = panel.querySelector<HTMLElement>('#settings-draft-bar');
+    if (bar) {
+      bar.hidden = !dirty;
+    }
+
+    const inlineState = panel.querySelector<HTMLElement>('#settings-inline-dirty-hint');
+    if (inlineState) {
+      inlineState.textContent = dirty
+        ? '当前有未保存的监控与代理修改'
+        : '所有监控与分流设置已与本机配置同步';
+      inlineState.classList.toggle('is-dirty', dirty);
+    }
+  }
+
+  function paintIgnoredSummaryAndV6Switches() {
+    const count = ignoredDraft.size;
+    const pill = panel.querySelector<HTMLElement>('#ignored-count-pill');
+    if (pill) {
+      pill.textContent = `已忽略 ${count} / ${ALL_IGNORABLE_IDS.length} 项`;
+      pill.className = count > 0 ? 'pill warn tabular' : 'pill tabular';
+    }
+    const clearBtn = panel.querySelector<HTMLButtonElement>('#clear-ignored-checks');
+    if (clearBtn) {
+      clearBtn.hidden = count === 0;
+    }
+
+    // Sync checkboxes in the 2-column grid
+    panel.querySelectorAll<HTMLInputElement>('input[name="ignored_checks"]').forEach(box => {
+      const checked = ignoredDraft.has(box.value);
+      box.checked = checked;
+      const card = box.closest('.ignore-check-card');
+      card?.classList.toggle('is-ignored', checked);
+      const badge = card?.querySelector('.ignore-check-badge');
+      if (badge) badge.textContent = checked ? '已忽略' : '计入';
+    });
+
+    // Sync directional IPv6 requirement switches
+    const cnV6Switch = panel.querySelector<HTMLInputElement>('#require-cn-v6');
+    const globalV6Switch = panel.querySelector<HTMLInputElement>('#require-global-v6');
+    if (cnV6Switch) {
+      cnV6Switch.checked = ipv6RequiredDraft && !ignoredDraft.has('probe:cn-v6');
+    }
+    if (globalV6Switch) {
+      globalV6Switch.checked = ipv6RequiredDraft && !ignoredDraft.has('probe:global-v6');
+    }
+  }
+
+  function paintProxyAndIntervalChips() {
+    const form = panel.querySelector<HTMLFormElement>('#settings-form');
+    if (!form) return;
+
+    const intervalVal = Number(form.querySelector<HTMLInputElement>('[name="interval"]')?.value || 0);
+    form.querySelectorAll<HTMLButtonElement>('[data-interval-preset]').forEach(chip => {
+      const active = Number(chip.dataset.intervalPreset) === intervalVal;
+      chip.classList.toggle('is-active', active);
+      chip.setAttribute('aria-pressed', String(active));
+    });
+
+    for (const target of ['foreign_proxy', 'domestic_proxy'] as const) {
+      const val = form.querySelector<HTMLInputElement>(`[name="${target}"]`)?.value.trim() ?? '';
+      form.querySelectorAll<HTMLButtonElement>(`[data-proxy-target="${target}"]`).forEach(chip => {
+        const active = (chip.dataset.proxyPreset ?? '') === val;
+        chip.classList.toggle('is-active', active);
+        chip.setAttribute('aria-pressed', String(active));
+      });
+    }
+  }
+
+  function populateFormFromSettings(s: Settings) {
+    const form = panel.querySelector<HTMLFormElement>('#settings-form');
+    if (!form) return;
+
+    const setInput = (name: string, val: string) => {
+      const el = form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`);
+      if (el) el.value = val;
+    };
+    const setCheck = (name: string, checked: boolean) => {
+      const el = form.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (el) el.checked = checked;
+    };
+
+    setInput('interval', String(s.interval));
+    setCheck('notifications', Boolean(s.notifications));
+    setCheck('retain_history', Boolean(s.retain_history));
+    setInput('foreign_proxy', s.foreign_proxy || '');
+    setInput('domestic_proxy', s.domestic_proxy || '');
+    setInput('manual_nodes_only', String(Boolean(s.manual_nodes_only)));
+    setInput('claude_proxy', s.claude_proxy || '');
+    setInput('gemini_proxy', s.gemini_proxy || '');
+    setInput('gemini_ip_url', s.gemini_ip_url || '');
+
+    ipv6RequiredDraft = Boolean(s.ipv6_required);
+    ignoredDraft = new Set(s.ignored_checks || []);
+    lastSyncedSignature = JSON.stringify(comparableSettings(s));
+
+    paintIgnoredSummaryAndV6Switches();
+    paintProxyAndIntervalChips();
+    paintDraftState();
+  }
+
+  function paintAutostart(customMessage?: string) {
+    const input = panel.querySelector<HTMLInputElement>('#setting-autostart');
+    if (input) {
+      input.checked = autostart === true;
+      input.disabled = autostart === null || autostartBusy;
+      input.setAttribute('aria-busy', String(autostartBusy));
+    }
+    const pill = panel.querySelector<HTMLElement>('#autostart-pill');
+    if (pill) {
+      if (autostart === null) {
+        pill.className = 'pill';
+        pill.textContent = '读取中';
+      } else if (autostart) {
+        pill.className = 'pill ok';
+        pill.textContent = '已开启';
+      } else {
+        pill.className = 'pill';
+        pill.textContent = '未开启';
+      }
+    }
+    const note = panel.querySelector<HTMLElement>('#autostart-status');
+    if (note) {
+      note.textContent =
+        customMessage ||
+        (autostartBusy
+          ? '正在同步操作系统启动项…'
+          : autostart === null
+            ? '暂无法读取系统开机启动项状态，切换页面后将自动重试。'
+            : '登录系统后自动在托盘后台运行监控，切换后立即生效。');
+    }
+  }
+
+  async function syncAutostart() {
+    if (autostartBusy) return;
+    try {
+      autostart = await invoke<boolean>('get_autostart');
+      paintAutostart();
+    } catch (e) {
+      autostart = null;
+      paintAutostart(`读取开机自启状态失败：${String(e)}`);
+    }
+  }
+
+  async function refreshPermissions() {
+    const wifiBadge = panel.querySelector<HTMLElement>('#wifi-permission-badge');
+    const wifiText = panel.querySelector<HTMLElement>('#wifi-permission-status');
+    const wifiActions = panel.querySelector<HTMLElement>('#wifi-permission-actions');
+    const notifyBadge = panel.querySelector<HTMLElement>('#notification-permission-badge');
+    const notifyText = panel.querySelector<HTMLElement>('#notification-permission-status');
+    const reqNotifyBtn = panel.querySelector<HTMLButtonElement>('#request-notifications');
+
+    if (!wifiText || !notifyText) return;
+
+    await Promise.all([
+      invoke<string>('wifi_permission_status')
+        .then(status => {
+          if (status === 'not_required') {
+            if (wifiBadge) {
+              wifiBadge.className = 'pill ok';
+              wifiBadge.textContent = '当前系统可直接读取网卡与 Wi-Fi 名称';
+            }
+            wifiText.textContent = '无需申请额外定位权限，物理链路与当前 Wi-Fi 名称由系统网络接口直接提供。';
+            if (wifiActions) wifiActions.hidden = true;
+            return;
+          }
+
+          if (wifiActions) wifiActions.hidden = false;
+          const meta: Record<string, { pill: string; cls: string; desc: string }> = {
+            granted: {
+              pill: '已授权',
+              cls: 'pill ok',
+              desc: '已允许读取当前连接的 Wi-Fi 名称；应用仅读取 SSID，不获取或存储地理位置坐标。',
+            },
+            not_determined: {
+              pill: '待申请授权',
+              cls: 'pill warn',
+              desc: 'macOS 需要定位权限才能读取 Wi-Fi 名称；未授权不影响公网出口 IP 检测。',
+            },
+            denied: {
+              pill: '已在系统中拒绝',
+              cls: 'pill warn',
+              desc: '请在系统定位隐私设置中允许 Exit Sentinel，以便区分不同 Wi-Fi 网络下的出口变化。',
+            },
+            restricted: {
+              pill: '受策略限制',
+              cls: 'pill warn',
+              desc: '当前受系统屏幕使用时间或设备管理策略限制，无法读取 Wi-Fi 名称。',
+            },
+            services_off: {
+              pill: '系统定位已关闭',
+              cls: 'pill warn',
+              desc: '请先在系统设置中开启定位服务总开关，再允许 Exit Sentinel。',
+            },
+            settings: {
+              pill: '需检查系统设置',
+              cls: 'pill warn',
+              desc: '请在系统定位设置中确认已开启定位服务及桌面应用读取权限。',
+            },
+          };
+          const picked = meta[status] || {
+            pill: status,
+            cls: 'pill',
+            desc: '请在系统隐私设置中检查定位授权状态。',
+          };
+          if (wifiBadge) {
+            wifiBadge.className = picked.cls;
+            wifiBadge.textContent = picked.pill;
+          }
+          wifiText.textContent = picked.desc;
+          const requestBtn = panel.querySelector<HTMLButtonElement>('#wifi-name-permission');
+          if (requestBtn) requestBtn.hidden = status === 'granted';
+        })
+        .catch(err => {
+          if (wifiBadge) {
+            wifiBadge.className = 'pill risk';
+            wifiBadge.textContent = '读取失败';
+          }
+          wifiText.textContent = `无法读取权限状态：${String(err)}`;
+        }),
+
+      isPermissionGranted()
+        .then(granted => {
+          if (notifyBadge) {
+            notifyBadge.className = granted ? 'pill ok' : 'pill warn';
+            notifyBadge.textContent = granted ? '已允许通知' : '尚未授权';
+          }
+          notifyText.textContent = granted
+            ? '系统通知权限已开启（实际横幅展现仍遵循系统专注 / 勿扰模式）。'
+            : '尚未授予通知权限；点击“申请通知权限”或“发送测试通知”可发起系统授权。';
+          if (reqNotifyBtn) reqNotifyBtn.hidden = granted;
+        })
+        .catch(err => {
+          if (notifyBadge) {
+            notifyBadge.className = 'pill risk';
+            notifyBadge.textContent = '读取失败';
+          }
+          notifyText.textContent = `无法读取通知权限：${String(err)}`;
+        }),
+    ]);
+  }
+
+  function applyActiveSection(sub: SettingsSubTab) {
+    activeSection = sub;
+    try {
+      localStorage.setItem('sentinel.settings.section', sub);
+    } catch {}
+
+    const form = panel.querySelector<HTMLFormElement>('#settings-form');
+    const monitorSec = panel.querySelector<HTMLElement>('#monitor-settings');
+    const routingSec = panel.querySelector<HTMLElement>('#routing-settings');
+    const webdavSec = panel.querySelector<HTMLElement>('#webdav-settings');
+    const updateSec = panel.querySelector<HTMLElement>('#update-settings');
+
+    const isFormSection = sub === 'monitor-settings' || sub === 'routing-settings';
+    if (form) form.hidden = !isFormSection;
+    if (monitorSec) monitorSec.hidden = sub !== 'monitor-settings';
+    if (routingSec) routingSec.hidden = sub !== 'routing-settings';
+    if (webdavSec) webdavSec.hidden = sub !== 'webdav-settings';
+    if (updateSec) updateSec.hidden = sub !== 'update-settings';
+
+    if (sub === 'monitor-settings') {
+      void refreshPermissions();
+      void syncAutostart();
+    } else if (sub === 'webdav-settings') {
+      void loadSync();
+    } else if (sub === 'update-settings') {
+      void refreshUpdateStatus();
+    }
+  }
+
+  function mountDom(s: Settings, probes: Probe[] | undefined) {
+    ipv6RequiredDraft = Boolean(s.ipv6_required);
+    ignoredDraft = new Set(s.ignored_checks || []);
+    lastSyncedSignature = JSON.stringify(comparableSettings(s));
+
+    const requireCnV6 = ipv6RequiredDraft && !ignoredDraft.has('probe:cn-v6');
+    const requireGlobalV6 = ipv6RequiredDraft && !ignoredDraft.has('probe:global-v6');
+    const ignoredCount = ignoredDraft.size;
+
+    panel.innerHTML = `<div class="settings-workspace">
+      <form id="settings-form" class="settings-form" novalidate>
+        <div id="monitor-settings" class="settings-section">
+          <section class="panel settings settings-card">
+            <div class="card-head">
+              <div>
+                <h2>系统与权限</h2>
+                <p class="small muted">管理开机托盘自启、操作系统通知与物理网卡 Wi-Fi 名称读取状态。</p>
+              </div>
+              <button type="button" class="ghost-btn" id="refresh-permissions">
+                ${icon('refresh')}<span>刷新状态</span>
+              </button>
+            </div>
+
+            <div class="perm-list">
+              <label class="toggle perm-toggle" for="setting-autostart">
+                <span>
+                  <span class="perm-title-line">
+                    <strong>开机自动启动</strong>
+                    <span id="autostart-pill" class="pill">${autostart === null ? '读取中' : autostart ? '已开启' : '未开启'}</span>
+                  </span>
+                  <small id="autostart-status">登录系统后自动在托盘后台运行监控，切换后立即生效。</small>
+                </span>
+                <input id="setting-autostart" name="autostart" type="checkbox" role="switch" data-immediate="true" ${autostart ? 'checked' : ''} ${autostart === null || autostartBusy ? 'disabled' : ''}>
+              </label>
+
+              <div class="perm-row">
+                <div class="perm-info">
+                  <div class="perm-title-line">
+                    <strong>桌面通知</strong>
+                    <span id="notification-permission-badge" class="pill">正在检查…</span>
+                  </div>
+                  <small id="notification-permission-status" role="status">正在读取操作系统通知授权状态…</small>
+                </div>
+                <div class="perm-actions">
+                  <button type="button" id="request-notifications">申请通知权限</button>
+                  <button type="button" id="test-notification">发送测试通知</button>
+                </div>
+              </div>
+
+              <div class="perm-row">
+                <div class="perm-info">
+                  <div class="perm-title-line">
+                    <strong>Wi-Fi 名称读取权限</strong>
+                    <span id="wifi-permission-badge" class="pill">正在检查…</span>
+                  </div>
+                  <small id="wifi-permission-status" role="status">正在检测当前系统网卡与 Wi-Fi 名称读取方式…</small>
+                </div>
+                <div class="perm-actions" id="wifi-permission-actions" hidden>
+                  <button type="button" class="primary" id="wifi-name-permission">申请读取权限</button>
+                  <button type="button" id="location-settings">打开定位设置</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel settings settings-card">
+            <div class="card-head">
+              <div>
+                <h2>监控周期与通知策略</h2>
+                <p class="small muted">所有出口与连通性变化均经过连续两次观测确认，过滤偶发网络抖动。</p>
+              </div>
+            </div>
+
+            <div class="setting-inline-row">
+              <div class="setting-inline-copy">
+                <label for="setting-interval">后台轮询间隔</label>
+                <small>默认 <span class="tabular">30</span> 秒（支持 <span class="tabular">10–3600</span> 秒）；本机 Wi-Fi 或网卡切换时约 <span class="tabular">6</span> 秒快速复检。</small>
+              </div>
+              <div class="interval-controls">
+                <div class="preset-chips" role="group" aria-label="常用轮询间隔">
+                  ${INTERVAL_PRESETS.map(
+                    sec => `<button type="button" class="preset-chip tabular${s.interval === sec ? ' is-active' : ''}" data-interval-preset="${sec}" aria-pressed="${s.interval === sec}">${sec} 秒</button>`
+                  ).join('')}
+                </div>
+                <div class="interval-input-wrap">
+                  <input id="setting-interval" class="mono tabular" name="interval" type="number" min="10" max="3600" step="1" value="${s.interval}" required>
+                  <span class="unit-suffix">秒</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-switches-block">
+              <label class="toggle">
+                <span>出口变化与故障恢复通知<small>出口 IP 变更、Google / Claude / Gemini 连接失败、访问受限或恢复正常时发送系统通知；持续故障不重复打扰。</small></span>
+                <input name="notifications" type="checkbox" role="switch" ${s.notifications ? 'checked' : ''}>
+              </label>
+
+              <label class="toggle">
+                <span>保存状态变化历史<small>在本机保留最近 <span class="tabular">200</span> 条出口与连通性变更记录；关闭保存时将清空现有历史记录。</small></span>
+                <input name="retain_history" type="checkbox" role="switch" ${s.retain_history ? 'checked' : ''}>
+              </label>
+
+              <label class="toggle" for="require-cn-v6">
+                <span>要求国内 IPv6 可用<small>开启后，国内 IPv6 探测无可用地址时将计入整体异常状态并提醒。</small></span>
+                <input id="require-cn-v6" type="checkbox" role="switch" data-v6-direction="cn" ${requireCnV6 ? 'checked' : ''}>
+              </label>
+
+              <label class="toggle" for="require-global-v6">
+                <span>要求国外 IPv6 可用<small>开启后，国外 IPv6 探测无可用地址时将计入整体异常状态并提醒。</small></span>
+                <input id="require-global-v6" type="checkbox" role="switch" data-v6-direction="global" ${requireGlobalV6 ? 'checked' : ''}>
+              </label>
+            </div>
+          </section>
+
+          <section id="ignored-checks" tabindex="-1" class="panel settings settings-card">
+            <div class="card-head">
+              <div>
+                <h2>忽略的检测项</h2>
+                <p class="small muted">勾选的项目仍照常探测并显示实时结果，但失败或受限时不会将托盘图标标黄或触发异常告警。</p>
+              </div>
+              <div class="card-head-actions">
+                <span id="ignored-count-pill" class="${ignoredCount > 0 ? 'pill warn tabular' : 'pill tabular'}">已忽略 ${ignoredCount} / ${ALL_IGNORABLE_IDS.length} 项</span>
+                <button type="button" class="ghost-btn" id="clear-ignored-checks" ${ignoredCount === 0 ? 'hidden' : ''}>全部恢复计入</button>
+              </div>
+            </div>
+
+            <div class="ignore-groups-grid">
+              <fieldset class="ignore-group">
+                <legend class="tabular">AI 与网站访问 (4)</legend>
+                <div class="ignore-grid">
+                  ${SITE_CHECKS.map(item => renderCheckItem(item, ignoredDraft)).join('')}
+                </div>
+              </fieldset>
+
+              <fieldset class="ignore-group">
+                <legend class="tabular">出口检测站 (6)</legend>
+                <div class="ignore-grid">
+                  ${PROBE_CHECKS.map(item => renderCheckItem(item, ignoredDraft)).join('')}
+                </div>
+              </fieldset>
+            </div>
+          </section>
+        </div>
+
+        <div id="routing-settings" class="settings-section" hidden>
+          <div class="proxy-cards-grid">
+            <section class="panel settings settings-card proxy-card">
+              <div class="card-head">
+                <div>
+                  <h2>国外与 AI 检测代理</h2>
+                  <p class="small muted">用于国外 IPv4 / IPv6 检测站、国际网站连通性及 IP 归属查询。支持一键填入本地无认证端口或自定义 URL。</p>
+                </div>
+              </div>
+              ${renderPresetChips('foreign_proxy', s.foreign_proxy, FOREIGN_PROXY_PRESETS)}
+              <div class="field">
+                <label for="setting-foreign-proxy">国外检测代理地址</label>
+                <input
+                  id="setting-foreign-proxy"
+                  class="mono"
+                  name="foreign_proxy"
+                  type="text"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  value="${esc(s.foreign_proxy)}"
+                  placeholder="留空走系统路由 / TUN，或填 http:// / socks5h://127.0.0.1:端口"
+                >
+                <small>支持 <code class="mono">http://</code>、<code class="mono">https://</code>、<code class="mono">socks5://</code>、<code class="mono">socks5h://</code> 或 <code class="mono">direct</code>；不保存带密码的代理地址。</small>
+              </div>
+            </section>
+
+            <section class="panel settings settings-card proxy-card">
+              <div class="card-head">
+                <div>
+                  <h2>国内检测代理</h2>
+                  <p class="small muted">仅用于国内两个 IPv4 检测站与国内 IPv6 检测站。开启全局代理时建议选“直连不使用代理”以观测真实本机国内出口。</p>
+                </div>
+              </div>
+              ${renderPresetChips('domestic_proxy', s.domestic_proxy, DOMESTIC_PROXY_PRESETS)}
+              <div class="field">
+                <label for="setting-domestic-proxy">国内检测代理地址</label>
+                <input
+                  id="setting-domestic-proxy"
+                  class="mono"
+                  name="domestic_proxy"
+                  type="text"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  value="${esc(s.domestic_proxy)}"
+                  placeholder="留空走系统路由 / TUN，或填 direct 绕过进程代理"
+                >
+                <small><code class="mono">direct</code> 仅忽略系统进程代理变量，若开启了全局网卡级 TUN 仍遵循系统路由表。</small>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel settings settings-card">
+            <div class="card-head">
+              <div>
+                <h2>AI 服务独立分流与节点来源</h2>
+                <p class="small muted">默认留空以沿用系统或 TUN 真实分流路径（不会自动继承上方“国外检测代理”）；仅在多端口隔离分流时单独指定。</p>
+              </div>
+              <div class="card-head-actions">
+                <button type="button" class="ghost-btn" id="copy-foreign-to-ai">填入当前国外代理</button>
+                <button type="button" class="ghost-btn" id="clear-ai-proxies">清空独立代理</button>
+              </div>
+            </div>
+
+            <div class="settings-grid">
+              <div class="field field-full">
+                <label for="setting-node-source">代理节点数据来源</label>
+                <select id="setting-node-source" name="manual_nodes_only">
+                  <option value="false" ${!s.manual_nodes_only ? 'selected' : ''}>自动读取本机客户端（Windows / Linux：Clash Verge；macOS：Shadowrocket）</option>
+                  <option value="true" ${s.manual_nodes_only ? 'selected' : ''}>仅使用手动导入的节点记录（Clash Verge / Shadowrocket / Karing / Clash Mi）</option>
+                </select>
+                <small>自动读取仅以只读方式观测近期同域名连接快照或活动策略，绝不修改客户端规则。</small>
+              </div>
+
+              <div class="field">
+                <label for="setting-claude-proxy">Claude 独立检测代理（可选）</label>
+                <input
+                  id="setting-claude-proxy"
+                  class="mono"
+                  name="claude_proxy"
+                  type="text"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  value="${esc(s.claude_proxy)}"
+                  placeholder="默认留空，或填独立本地代理端口 URL"
+                >
+              </div>
+
+              <div class="field">
+                <label for="setting-gemini-proxy">Gemini 独立检测代理（可选）</label>
+                <input
+                  id="setting-gemini-proxy"
+                  class="mono"
+                  name="gemini_proxy"
+                  type="text"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  value="${esc(s.gemini_proxy)}"
+                  placeholder="默认留空，或填独立本地代理端口 URL"
+                >
+              </div>
+            </div>
+          </section>
+
+          <details class="panel settings-details" ${s.gemini_ip_url ? 'open' : ''}>
+            <summary>
+              <span class="guide-summary-title">高级：自定义出口检测站地址</span>
+              <span class="guide-summary-sub">自定义 Gemini HTTPS 出口回显地址与查看 <span class="tabular">6</span> 个内置探测源</span>
+            </summary>
+            <div class="settings-details-body">
+              <div class="details-toolbar">
+                <span class="small muted">当本机代理未转发 UDP（导致默认 Google STUN 回显不走代理）时，可指定与 Gemini 同分流规则的 HTTPS IP 回显地址。</span>
+                <button type="button" id="reset-probe-urls">重置默认地址</button>
+              </div>
+
+              <div class="field">
+                <label for="setting-gemini-ip-url">Gemini 参考出口回显地址（无认证 HTTPS，可选）</label>
+                <input
+                  id="setting-gemini-ip-url"
+                  class="mono"
+                  name="gemini_ip_url"
+                  type="url"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  value="${esc(s.gemini_ip_url)}"
+                  placeholder="默认留空（使用 Google STUN UDP 自动回显出口 IP）"
+                >
+                <small>填写示例：<code class="mono">https://api.ipify.org?format=json</code>。Google 判定的服务地区始终直接从 <code class="mono">gemini.google.com</code> 页面读取。</small>
+              </div>
+
+              <div class="probe-endpoints-section">
+                <div class="probe-endpoints-title">
+                  <strong class="tabular">内置出口检测站地址（6 个探测源）</strong>
+                  <span class="small muted">国内与国外双源交叉核验，支持一键复制地址用于终端排查</span>
+                </div>
+                <div id="probe-endpoints-host">
+                  ${renderProbeEndpoints(probes)}
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="panel settings-inline-footer">
+          <span id="settings-inline-dirty-hint" class="small muted">所有监控与分流设置已与本机配置同步</span>
+          <div class="settings-inline-actions">
+            <button type="button" data-restore-draft>还原</button>
+            <button type="submit" class="primary">保存并生效</button>
+          </div>
+        </div>
+      </form>
+
+      <div id="settings-draft-bar" class="settings-draft-bar" role="region" aria-label="未保存设置提示" hidden>
+        <span class="draft-bar-status" role="status">
+          <span class="dot amber"></span>
+          <strong>有未保存的监控与代理设置</strong>
+        </span>
+        <div class="draft-bar-actions">
+          <button type="button" id="restore-settings" data-restore-draft>还原</button>
+          <button type="submit" form="settings-form" class="primary">保存并生效</button>
+        </div>
+      </div>
+
+      ${syncSettings()}
+
+      <div id="update-settings" class="settings-section" hidden>
+        <section id="updater-card-host" class="panel settings settings-card">${updateSettings()}</section>
+        ${renderGuide()}
+      </div>
+    </div>`;
+
+    applyActiveSection(activeSection);
+    paintDraftState();
+  }
+
+  // --- Scoped Event Listeners on `panel` ---
 
   panel.addEventListener('input', e => {
-    const field = e.target as HTMLInputElement;
-    const form = field.closest<HTMLFormElement>('#settings-form');
-    if (form && !field.dataset.listAction) {
-      form.dataset.dirty = 'true';
-      paintSettingsDraft();
+    const target = e.target as HTMLElement;
+    if (!target.closest('#settings-form')) return;
+    if ((target as HTMLInputElement).dataset.immediate === 'true') return;
+    if (target instanceof HTMLInputElement) {
+      target.setCustomValidity('');
     }
+    paintProxyAndIntervalChips();
+    paintDraftState();
   });
 
-  panel.addEventListener('change', e => {
-    const field = e.target as HTMLInputElement;
-    const form = field.closest<HTMLFormElement>('#settings-form');
-    if (form && !field.dataset.listAction) {
-      form.dataset.dirty = 'true';
-      paintSettingsDraft();
+  panel.addEventListener('change', async e => {
+    const target = e.target as HTMLInputElement;
+
+    // 1. Immediate Autostart Switch
+    if (target.id === 'setting-autostart') {
+      if (autostartBusy) return;
+      const wanted = target.checked;
+      autostartBusy = true;
+      paintAutostart();
+      try {
+        autostart = await invoke<boolean>('set_autostart', { enabled: wanted });
+        showToast(autostart ? '已开启开机自动启动' : '已关闭开机自动启动', false, 'safe');
+      } catch (err) {
+        try {
+          autostart = await invoke<boolean>('get_autostart');
+        } catch {
+          autostart = null;
+        }
+        showToast(`设置开机自动启动失败：${String(err)}`, true, 'risk');
+      } finally {
+        autostartBusy = false;
+        paintAutostart();
+      }
+      return;
     }
+
+    if (!target.closest('#settings-form')) return;
+    if (target.dataset.immediate === 'true') return;
+
+    // 2. Directional IPv6 Requirement Toggles (`require-cn-v6` / `require-global-v6`)
+    if (target.dataset.v6Direction) {
+      const cnSwitch = panel.querySelector<HTMLInputElement>('#require-cn-v6');
+      const globalSwitch = panel.querySelector<HTMLInputElement>('#require-global-v6');
+      const wantCn = Boolean(cnSwitch?.checked);
+      const wantGlobal = Boolean(globalSwitch?.checked);
+
+      if (!wantCn && !wantGlobal) {
+        ipv6RequiredDraft = false;
+      } else {
+        ipv6RequiredDraft = true;
+        if (wantCn) ignoredDraft.delete('probe:cn-v6');
+        else ignoredDraft.add('probe:cn-v6');
+
+        if (wantGlobal) ignoredDraft.delete('probe:global-v6');
+        else ignoredDraft.add('probe:global-v6');
+      }
+      paintIgnoredSummaryAndV6Switches();
+      paintDraftState();
+      return;
+    }
+
+    // 3. Ignored Check Grid Checkboxes
+    if (target.name === 'ignored_checks') {
+      if (target.checked) ignoredDraft.add(target.value);
+      else ignoredDraft.delete(target.value);
+      if (ignoredDraft.has('probe:cn-v6') && ignoredDraft.has('probe:global-v6')) {
+        ipv6RequiredDraft = false;
+      }
+      paintIgnoredSummaryAndV6Switches();
+      paintDraftState();
+      return;
+    }
+
+    paintProxyAndIntervalChips();
+    paintDraftState();
   });
+
+  // Sync Expand/Collapse All button when individual FAQ `<details>` toggle
+  panel.addEventListener(
+    'toggle',
+    e => {
+      const d = e.target;
+      if (!(d instanceof HTMLDetailsElement) || !d.classList.contains('guide-card')) return;
+      const allCards = Array.from(panel.querySelectorAll<HTMLDetailsElement>('.guide-card'));
+      const toggleBtn = panel.querySelector<HTMLButtonElement>('#toggle-all-guides');
+      if (!toggleBtn || !allCards.length) return;
+      const everyOpen = allCards.every(card => card.open);
+      toggleBtn.setAttribute('aria-expanded', String(everyOpen));
+      toggleBtn.textContent = everyOpen ? '收起全部' : '展开全部';
+    },
+    { capture: true }
+  );
 
   panel.addEventListener('click', async e => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('#test-notification');
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
     if (!btn || btn.disabled) return;
-    if (await permission()) {
-      await app.testNotification();
-      app.showToast('已向系统提交通知，请确认通知是否出现。');
+
+    // Interval preset chip
+    if (btn.dataset.intervalPreset) {
+      const input = panel.querySelector<HTMLInputElement>('#setting-interval');
+      if (input) {
+        input.value = btn.dataset.intervalPreset;
+        input.setCustomValidity('');
+        paintProxyAndIntervalChips();
+        paintDraftState();
+      }
+      return;
+    }
+
+    // Proxy preset chip
+    if (btn.dataset.proxyTarget) {
+      const fieldName = btn.dataset.proxyTarget as 'foreign_proxy' | 'domestic_proxy';
+      const input = panel.querySelector<HTMLInputElement>(`#settings-form [name="${fieldName}"]`);
+      if (input) {
+        input.value = btn.dataset.proxyPreset ?? '';
+        input.setCustomValidity('');
+        paintProxyAndIntervalChips();
+        paintDraftState();
+      }
+      return;
+    }
+
+    // Restore draft
+    if (btn.hasAttribute('data-restore-draft')) {
+      if (settingsSaving) return;
+      const s = app.getState()?.settings;
+      if (s) {
+        populateFormFromSettings(s);
+        showToast('已还原未保存的监控与代理设置');
+      }
+      return;
+    }
+
+    switch (btn.id) {
+      case 'refresh-permissions':
+        await Promise.all([refreshPermissions(), syncAutostart()]);
+        showToast('已刷新系统启动与权限状态');
+        break;
+
+      case 'request-notifications':
+        await ensureNotificationPermission();
+        await refreshPermissions();
+        break;
+
+      case 'test-notification':
+        if (await ensureNotificationPermission()) {
+          await app.testNotification();
+          await refreshPermissions();
+          showToast('已发送测试通知，请查看系统右上角或通知中心。', false, 'safe');
+        }
+        break;
+
+      case 'wifi-name-permission':
+      case 'location-settings':
+        // `src/main.ts` invokes the Tauri command; refresh local permission pill right after.
+        setTimeout(() => {
+          void refreshPermissions();
+        }, 450);
+        break;
+
+      case 'clear-ignored-checks':
+        ignoredDraft.clear();
+        paintIgnoredSummaryAndV6Switches();
+        paintDraftState();
+        break;
+
+      case 'copy-foreign-to-ai': {
+        const foreignVal = panel.querySelector<HTMLInputElement>('#setting-foreign-proxy')?.value.trim() || '';
+        const claudeInput = panel.querySelector<HTMLInputElement>('#setting-claude-proxy');
+        const geminiInput = panel.querySelector<HTMLInputElement>('#setting-gemini-proxy');
+        if (claudeInput) claudeInput.value = foreignVal;
+        if (geminiInput) geminiInput.value = foreignVal;
+        paintDraftState();
+        showToast(foreignVal ? `已将 Claude 与 Gemini 代理设为 ${foreignVal}` : '国外检测代理当前为空，已同步清空');
+        break;
+      }
+
+      case 'clear-ai-proxies': {
+        const claudeInput = panel.querySelector<HTMLInputElement>('#setting-claude-proxy');
+        const geminiInput = panel.querySelector<HTMLInputElement>('#setting-gemini-proxy');
+        if (claudeInput) claudeInput.value = '';
+        if (geminiInput) geminiInput.value = '';
+        paintDraftState();
+        break;
+      }
+
+      case 'reset-probe-urls': {
+        const geminiUrlInput = panel.querySelector<HTMLInputElement>('#setting-gemini-ip-url');
+        if (geminiUrlInput) {
+          geminiUrlInput.value = '';
+          geminiUrlInput.setCustomValidity('');
+        }
+        paintDraftState();
+        showToast('已恢复默认出口检测地址（Gemini 使用 Google STUN 回显）');
+        break;
+      }
+
+      case 'toggle-all-guides': {
+        const expand = btn.getAttribute('aria-expanded') !== 'true';
+        panel.querySelectorAll<HTMLDetailsElement>('.guide-card').forEach(card => {
+          card.open = expand;
+        });
+        btn.setAttribute('aria-expanded', String(expand));
+        btn.textContent = expand ? '收起全部' : '展开全部';
+        break;
+      }
     }
   });
 
-  const mapSubToSection = (sub: string) => {
-    if (['monitor-settings', 'routing-settings', 'webdav-settings', 'update-settings'].includes(sub)) {
-      return sub;
+  panel.addEventListener('submit', async e => {
+    const form = e.target as HTMLFormElement;
+    if (form.id !== 'settings-form') return;
+    e.preventDefault();
+    if (settingsSaving) return;
+
+    // Validate interval & URLs across both `monitor-settings` and `routing-settings`,
+    // switching to the subtab containing any invalid input before calling `reportValidity()`.
+    const intervalInput = form.querySelector<HTMLInputElement>('#setting-interval');
+    if (intervalInput) {
+      const v = Number(intervalInput.value);
+      if (!Number.isFinite(v) || v < 10 || v > 3600) {
+        intervalInput.setCustomValidity('轮询间隔须在 10 到 3600 秒之间。');
+      } else {
+        intervalInput.setCustomValidity('');
+      }
     }
-    return 'monitor-settings';
-  };
+
+    const firstInvalid = form.querySelector<HTMLInputElement | HTMLSelectElement>(':invalid');
+    if (firstInvalid) {
+      const inRouting = Boolean(firstInvalid.closest('#routing-settings'));
+      const neededTab: SettingsSubTab = inRouting ? 'routing-settings' : 'monitor-settings';
+      if (activeSection !== neededTab) {
+        await app.navigate('settings', neededTab);
+      }
+      firstInvalid.focus({ preventScroll: false });
+      firstInvalid.reportValidity();
+      return;
+    }
+
+    const nextSettings = readFormSettings();
+    const currentSettings = app.getState()?.settings;
+    if (!nextSettings || !currentSettings) return;
+
+    const historyLen = app.getState()?.history.length || 0;
+    if (
+      !nextSettings.retain_history &&
+      currentSettings.retain_history &&
+      historyLen > 0 &&
+      !(await confirmAction({
+        title: '关闭并清空变化历史记录？',
+        message: `关闭后将删除本机已保存的 ${historyLen} 条变化记录，且后续不再保存新记录。`,
+        confirm: '清空记录并保存',
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+
+    settingsSaving = true;
+    const controls = Array.from(
+      panel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+        '#settings-form input:not([data-immediate="true"]), #settings-form select, #settings-form button, #settings-draft-bar button'
+      )
+    );
+    const prevDisabled = controls.map(c => c.disabled);
+    controls.forEach(c => {
+      c.disabled = true;
+    });
+
+    try {
+      if (nextSettings.notifications) {
+        await ensureNotificationPermission();
+      }
+      await app.saveSettings(nextSettings);
+      lastSyncedSignature = JSON.stringify(comparableSettings(nextSettings));
+      controls.forEach((c, idx) => {
+        c.disabled = prevDisabled[idx];
+      });
+      paintDraftState();
+      showToast('监控与分流设置已保存并生效', false, 'safe');
+    } catch (err) {
+      controls.forEach((c, idx) => {
+        c.disabled = prevDisabled[idx];
+      });
+      showToast(String(err), true, 'risk');
+    } finally {
+      settingsSaving = false;
+    }
+  });
+
+  // Keep clean form in sync if `view.settings` updates externally (e.g. WebDAV pull)
+  app.subscribe(snap => {
+    if (!mounted || !snap.view || settingsSaving) return;
+    const incomingSig = JSON.stringify(comparableSettings(snap.view.settings));
+    if (incomingSig !== lastSyncedSignature && !isSettingsDirty()) {
+      populateFormFromSettings(snap.view.settings);
+    }
+  });
 
   return {
     getSubTabs() {
@@ -500,63 +1139,104 @@ export function initSettingsPanel(panel: HTMLElement, app: AppShellApi): PanelHa
         { id: 'monitor-settings', label: '常规与监控' },
         { id: 'routing-settings', label: '代理与分流' },
         { id: 'webdav-settings', label: '云同步' },
-        { id: 'update-settings', label: '更新与关于', badge: hasUpd ? '新版本' : null, tone: hasUpd ? 'safe' : 'neutral' },
+        {
+          id: 'update-settings',
+          label: '更新与关于',
+          badge: hasUpd ? '新版本' : null,
+          tone: hasUpd ? 'safe' : 'neutral',
+        },
       ];
     },
+
     render(view, activeSub) {
+      const resolved = normalizeSubTab(activeSub);
       if (!view) return;
       if (!mounted || !panel.children.length) {
         mounted = true;
-        renderSettings(view.settings);
+        activeSection = resolved;
+        mountDom(view.settings, view.probes);
+        void loadSync();
+        return;
       }
-      selectSettingsSection(mapSubToSection(activeSub), false);
+      const probeHost = panel.querySelector<HTMLElement>('#probe-endpoints-host');
+      if (probeHost && view.probes?.length) {
+        probeHost.innerHTML = renderProbeEndpoints(view.probes);
+      }
+      const incomingSig = JSON.stringify(comparableSettings(view.settings));
+      if (incomingSig !== lastSyncedSignature && !isSettingsDirty() && !settingsSaving) {
+        populateFormFromSettings(view.settings);
+      }
+      applyActiveSection(resolved);
+      paintDraftState();
     },
+
     async canLeave(nextTab) {
-      if (nextTab === 'settings') return true;
-      if (settingsBusy() || syncInProgress()) {
-        app.showToast('设置操作正在进行，请等待完成后再切换页面。');
+      if (nextTab === 'settings') {
+        return true;
+      }
+      if (settingsSaving || syncInProgress() || autostartBusy) {
+        showToast('设置正在保存或同步中，请稍候再切换页面。');
         return false;
       }
-      const dirty =
-        panel.querySelector<HTMLFormElement>('#settings-form')?.dataset.dirty === 'true' ||
-        hasUnsavedSync();
-      if (
-        dirty &&
-        !(await confirmAction({
-          title: '离开未保存的设置？',
-          message: '离开后将丢失本页尚未保存的输入。',
+      const dirtyForm = isSettingsDirty();
+      const dirtyDav = hasUnsavedSync();
+      if (dirtyForm || dirtyDav) {
+        const ok = await confirmAction({
+          title: '放弃未保存的设置修改？',
+          message: dirtyForm && dirtyDav
+            ? '监控与代理设置、WebDAV 连接配置均有未保存的修改，离开后将还原为已保存状态。'
+            : dirtyForm
+              ? '当前有未保存的监控与代理设置修改，离开后将还原为已保存状态。'
+              : '当前有未保存的 WebDAV 连接输入，离开后将放弃修改。',
           confirm: '放弃修改并离开',
-        }))
-      ) {
-        return false;
+          danger: true,
+        });
+        if (!ok) return false;
       }
       discardUnsavedSync();
       mounted = false;
       return true;
     },
-    onActivate() {
-      void syncAutostart();
-    },
-    onAutostartChanged(enabled) {
-      setAutostart(enabled);
-    },
+
     hasUnsavedWork() {
-      return (
-        settingsBusy() ||
-        syncInProgress() ||
-        hasUnsavedSync() ||
-        panel.querySelector<HTMLFormElement>('#settings-form')?.dataset.dirty === 'true'
-      );
+      return settingsSaving || syncInProgress() || autostartBusy || hasUnsavedSync() || isSettingsDirty();
     },
+
+    onActivate(activeSub) {
+      const resolved = normalizeSubTab(activeSub);
+      if (resolved === 'monitor-settings') {
+        void syncAutostart();
+        void refreshPermissions();
+      } else if (resolved === 'webdav-settings') {
+        void loadSync();
+      } else if (resolved === 'update-settings') {
+        void refreshUpdateStatus();
+      }
+    },
+
+    onAutostartChanged(enabled) {
+      autostart = enabled;
+      paintAutostart();
+    },
+
+    onDataCleared() {
+      const s = app.getState()?.settings;
+      if (mounted && s && !settingsSaving) {
+        populateFormFromSettings(s);
+      }
+    },
+
     onNavigatePayload(sub, payload) {
-      selectSettingsSection(mapSubToSection(sub), false);
-      if (payload && typeof payload === 'object' && 'scrollTo' in (payload as any)) {
-        const id = String((payload as any).scrollTo);
-        const el = panel.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
-        el?.scrollIntoView({ block: 'start' });
-        el?.focus({ preventScroll: true });
+      const resolved = normalizeSubTab(sub);
+      applyActiveSection(resolved);
+      if (payload && typeof payload === 'object' && 'scrollTo' in (payload as Record<string, unknown>)) {
+        const id = String((payload as Record<string, unknown>).scrollTo || '');
+        if (id) {
+          const el = panel.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+          el?.scrollIntoView({ block: 'start' });
+          el?.focus({ preventScroll: true });
+        }
       }
     },
   };
 }
-
